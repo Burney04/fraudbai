@@ -1,4 +1,14 @@
+import os
 import streamlit as st
+
+for k in ["SUPABASE_URL", "SUPABASE_KEY", "TOKEN_KEY", "GOOGLE_REDIRECT_URI"]:
+    if k in st.secrets:
+        os.environ[k] = str(st.secrets[k])
+
+if "GOOGLE_CLIENT_SECRET_JSON" in st.secrets and not os.path.exists("client_secret.json"):
+    with open("client_secret.json", "w", encoding="utf-8") as f:
+        f.write(str(st.secrets["GOOGLE_CLIENT_SECRET_JSON"]))
+
 import login
 import register
 from FraudShield import dashboard
