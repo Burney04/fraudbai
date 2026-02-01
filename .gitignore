@@ -8,6 +8,7 @@ __pycache__/
 # secrets
 .env
 client_secret.json
+.local_session.json
 
 # editor config
 .vscode/

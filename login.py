@@ -4,11 +4,6 @@ from FraudShield.utils.auth import login_with_email, google_auth_link, google_lo
 from FraudShield.utils.supabase_client import supabase
 
 def show():
-    # temp debug
-    st.write("DEBUG query params:", dict(st.query_params))
-    st.write("DEBUG auth:", st.session_state.is_authenticated)
-    st.write("DEBUG user:", getattr(st.session_state.get("user"), "email", None))
-
     # Handle Google callback if returned
     if google_login_or_register():
         user_res = supabase.auth.get_user()
