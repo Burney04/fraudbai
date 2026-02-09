@@ -45,8 +45,64 @@ def create_profile(
 
 
 def login_with_email(email: str, password: str):
-    if not profile_exists(email):
-        return None, "Account not found. Please register first."
+    # Always returns: (res, err)
+    try:
+        if not profile_exists(email):
+            return None, "Account not found. Please register first."
+    except Exception as e:
+        return None, f"Profile check failed: {e}"
+
+    try:
+        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+
+        if res and getattr(res, "session", None) and getattr(res, "user", None):
+            _token_mgr().set_token(
+                email=res.user.email,
+                access_token=res.session.access_token,
+                refresh_token=res.session.refresh_token,
+                provider="app",
+            )
+            return res, None
+
+        # If Supabase returns something unexpected
+        return None, "Login failed: no session/user returned."
+    except Exception as e:
+        return None, str(e)
+
+def get_profile_names(email: str) -> dict:
+    """Return {'first_name':..., 'last_name':...} from profiles table."""
+    try:
+        res = (
+            supabase.table("profiles")
+            .select("first_name,last_name")
+            .eq("email", email)
+            .limit(1)
+            .execute()
+        )
+        if res and getattr(res, "data", None):
+            return res.data[0] if len(res.data) else {}
+    except Exception:
+        pass
+    return {}
+
+def set_display_name_in_session(first_name: str, last_name: str):
+    first_name = (first_name or "").strip()
+    last_name = (last_name or "").strip()
+
+    user_name = f"{first_name} {last_name}".strip() or "user_1"
+
+    if first_name and last_name:
+        initials = f"{first_name[0].upper()}{last_name[0].upper()}"
+    elif first_name:
+        initials = first_name[0].upper()
+    elif last_name:
+        initials = last_name[0].upper()
+    else:
+        initials = "U1"
+
+    st.session_state["user_name"] = user_name
+    st.session_state["user_initials"] = initials
+
 
     try:
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})

@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import time
 import jwt
 from jwt import ExpiredSignatureError
 import streamlit as st
@@ -30,6 +31,11 @@ class AuthTokenManager:
         self.cookie_manager = _get_cookie_manager(f"cookie_mgr_{cookie_name}")
 
     def get_decoded_token(self):
+        try:
+            self.cookie_manager.get_all()
+            time.sleep(0.05)  # small delay for frontend sync
+        except Exception:
+            pass
         token = self.cookie_manager.get(self.cookie_name)
         if token is None:
             return None
