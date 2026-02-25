@@ -179,16 +179,20 @@ def handle_google_callback():
     if "code" not in qp:
         return None
 
-    # keep debug for your UI
-    st.session_state["_last_google_qp"] = qp
-
+    st.toast("✅ Google callback received", icon="ℹ️")
     code = qp["code"]
     mode = qp.get("state") or "login"
+
+    # Immediately clear query parameters
+    st.query_params.clear()
+    st.toast("Query parameters cleared", icon="🧹")
 
     cfg = _load_google_client()
     client_id = cfg["client_id"]
     client_secret = cfg["client_secret"]
     redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8501")
+
+    st.toast(f"Exchanging code with redirect_uri: {redirect_uri}", icon="🔄")
 
     token_res = requests.post(
         "https://oauth2.googleapis.com/token",
@@ -201,65 +205,83 @@ def handle_google_callback():
         },
         timeout=20,
     )
-    token_res.raise_for_status()
-    token_json = token_res.json()
 
-    idt = token_json.get("id_token")
-    if not idt:
-        st.error("No id_token returned by Google token exchange.")
+    if token_res.status_code != 200:
+        error_msg = f"Token exchange failed: {token_res.status_code} - {token_res.text}"
+        st.session_state.google_error = error_msg
+        st.toast(error_msg, icon="❌")
         return None
 
-    info = google_id_token.verify_oauth2_token(
-        idt, google_requests.Request(), client_id
-    )
+    st.toast("Token exchange succeeded", icon="✅")
+    token_json = token_res.json()
+    idt = token_json.get("id_token")
+    if not idt:
+        st.session_state.google_error = "No id_token returned"
+        st.toast("No id_token", icon="❌")
+        return None
+
+    try:
+        info = google_id_token.verify_oauth2_token(
+            idt, google_requests.Request(), client_id
+        )
+    except Exception as e:
+        st.session_state.google_error = f"ID token verification failed: {e}"
+        st.toast(st.session_state.google_error, icon="❌")
+        return None
+
     email = info.get("email")
+    if not email:
+        st.session_state.google_error = "No email in verified token."
+        st.toast(st.session_state.google_error, icon="❌")
+        return None
 
-    # clear AFTER successful processing
-    st.query_params.clear()
-
+    st.toast(f"Email verified: {email}", icon="📧")
     return {"mode": mode, "email": email, "id_token": idt}
 
 def google_login_or_register():
-    try:
-        payload = handle_google_callback()
-    except Exception as e:
-        st.error(f"❌ Google callback failed: {e}")
+    # Clear any previous error (optional)
+    st.session_state.pop("google_error", None)
+
+    if st.session_state.get("is_authenticated"):
         return None
 
-    if not payload:
+    payload = handle_google_callback()
+    if payload is None:
         return None
 
-    email = payload.get("email")
-    id_token = payload.get("id_token")
+    email = payload["email"]
+    id_token = payload["id_token"]
 
-    st.write("DEBUG google email:", email)
-    st.write("DEBUG has id_token:", bool(id_token))
-
-    if not email or not id_token:
-        st.error("❌ Google auth failed (missing email or id_token).")
-        return None
-
+    st.toast("Signing in with Supabase...", icon="🔐")
     try:
         res = supabase.auth.sign_in_with_id_token({"provider": "google", "token": id_token})
-        st.write("DEBUG supabase sign_in_with_id_token ok:", bool(res and res.user))
     except Exception as e:
-        st.error(f"❌ Supabase Google sign-in failed: {e}")
+        st.session_state.google_error = f"Supabase Google sign-in failed: {e}"
+        st.toast(st.session_state.google_error, icon="❌")
         return None
 
     if not (res and res.session and res.user):
-        st.error("❌ Supabase Google sign-in failed (no session returned).")
+        st.session_state.google_error = "Supabase sign-in returned no user or session."
+        st.toast(st.session_state.google_error, icon="❌")
         return None
 
-    # Make the client adopt the session (important for future get_user calls)
     supabase.auth.set_session(res.session.access_token, res.session.refresh_token)
-
-    # Persist tokens
     _token_mgr().set_token(
         email=res.user.email,
         access_token=res.session.access_token,
         refresh_token=res.session.refresh_token,
         provider="google",
     )
+
+    # Profile creation (optional)
+    try:
+        if not profile_exists(res.user.email):
+            create_profile(email=res.user.email)
+    except Exception as e:
+        st.warning(f"Profile creation/check failed: {e}")
+
+    st.toast("Google login successful!", icon="🎉")
+    return res.user
 
 def restore_supabase_session_from_cookie() -> bool:
     """

@@ -21,25 +21,48 @@ def restore_session_from_cookie():
     if not data:
         return False
 
-    # Restore Supabase session
     try:
+        # Set the session with the tokens from the cookie
         supabase.auth.set_session(
             access_token=data["access_token"],
             refresh_token=data["refresh_token"],
         )
         user_res = supabase.auth.get_user()
         if user_res and user_res.user:
+            # Session is still valid
             st.session_state.is_authenticated = True
             st.session_state.user = user_res.user
-            
-            # Load profile names
             prof = get_profile_names(user_res.user.email)
             set_display_name_in_session(prof.get("first_name", ""), prof.get("last_name", ""))
-            
             return True
+        else:
+            # get_user returned empty – token probably expired
+            raise Exception("get_user returned no user")  # Force refresh attempt
     except Exception as e:
-        st.error(f"Session restoration failed: {e}")
-    
+        # Token expired or invalid – try to refresh using the refresh_token
+        st.warning(f"Session invalid, attempting refresh: {e}")
+        try:
+            refresh_res = supabase.auth.refresh_session(data["refresh_token"])
+            if refresh_res and refresh_res.session:
+                # Refresh succeeded – update cookie and session state
+                mgr.set_token(
+                    email=refresh_res.user.email,
+                    access_token=refresh_res.session.access_token,
+                    refresh_token=refresh_res.session.refresh_token,
+                    provider=data.get("provider", "app"),
+                )
+                st.session_state.is_authenticated = True
+                st.session_state.user = refresh_res.user
+                prof = get_profile_names(refresh_res.user.email)
+                set_display_name_in_session(prof.get("first_name", ""), prof.get("last_name", ""))
+                return True
+            else:
+                st.error("Refresh failed: no session returned")
+        except Exception as refresh_e:
+            st.error(f"Refresh also failed: {refresh_e}")
+
+    # If everything failed, delete the corrupted cookie
+    mgr.delete_token()
     return False
 
 def clear_session():
