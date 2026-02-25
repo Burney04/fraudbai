@@ -1,21 +1,14 @@
 import streamlit as st
 import re
-from FraudShield.utils.auth import login_with_email, google_auth_link, google_login_or_register, get_profile_names, set_display_name_in_session
+from FraudShield.utils.auth import login_with_email, google_auth_link, google_login_or_register
 from FraudShield.utils.supabase_client import supabase
 
 def show():
-    # Handle Google callback if returned
-    google_user = google_login_or_register()
-    if google_user:
-        st.session_state.is_authenticated = True
-        st.session_state.user = google_user
-
-        # (Already set by google_login_or_register, but safe if you want)
-        prof = get_profile_names(google_user.email)
-        set_display_name_in_session(prof.get("first_name", ""), prof.get("last_name", ""))
-
-        st.session_state.page = "dashboard"
-        st.rerun()
+    # temp debug
+    st.write("DEBUG query params:", dict(st.query_params))
+    st.write("DEBUG last google qp:", st.session_state.get("_last_google_qp"))
+    st.write("DEBUG auth:", st.session_state.is_authenticated)
+    st.write("DEBUG user:", getattr(st.session_state.get("user"), "email", None))
 
     def is_valid_email(email: str) -> bool:
         return re.match(r"[^@]+@[^@]+\.[^@]+", email)
@@ -65,10 +58,6 @@ def show():
                     st.success("✅ Login successful!")
                     st.session_state.is_authenticated = True
                     st.session_state.user = res.user
-
-                    prof = get_profile_names(res.user.email)
-                    set_display_name_in_session(prof.get("first_name", ""), prof.get("last_name", ""))
-
                     st.session_state.page = "dashboard"
                     st.rerun()
                 else:
