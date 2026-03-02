@@ -15,14 +15,12 @@ import login
 import register
 from FraudShield import dashboard
 from FraudShield.utils.session import init_session_state, restore_session_from_cookie
-from FraudShield.utils.auth import google_login_or_register
+from FraudShield.utils.auth import google_login_or_register, logout
 
 # 3. INITIALIZE SESSION
 init_session_state()
 
 # 4. THE INTERCEPTOR (CRITICAL FIX)
-# We check for the Google 'code' BEFORE doing anything else.
-# 4. THE INTERCEPTOR (STRENGTHENED)
 if "code" in st.query_params:
     try:
         user = google_login_or_register()
@@ -33,18 +31,32 @@ if "code" in st.query_params:
             st.query_params.clear()
             st.rerun()
         else:
-            # THIS PREVENTS THE JSON DUMP BY STOPPING THE SCRIPT
             st.error("Google Auth failed to return a user session.")
             st.stop() 
     except Exception as e:
         st.error(f"Critical Auth Error: {e}")
         st.stop()
 
-# 5. RESTORE EXISTING SESSION
+# 5. SESSION SWITCHING DETECTION (NEW)
+# Check if user is trying to log in with different credentials
+if st.session_state.get("is_authenticated") and "login_attempt" in st.query_params:
+    # Store current user email for comparison
+    current_email = None
+    if hasattr(st.session_state.get("user"), "email"):
+        current_email = st.session_state.user.email
+    
+    attempted_email = st.query_params.get("login_attempt_email")
+    
+    # If different user is trying to log in, clear the session
+    if attempted_email and attempted_email != current_email:
+        st.warning(f"Switching from {current_email} to {attempted_email}")
+        logout()  # This will clear everything and rerun
+
+# 6. RESTORE EXISTING SESSION
 if not st.session_state.is_authenticated:
     restore_session_from_cookie()
 
-# 6. ROUTING LOGIC
+# 7. ROUTING LOGIC
 if st.session_state.is_authenticated:
     st.session_state.page = "dashboard"
 elif "page" not in st.session_state:
