@@ -291,6 +291,38 @@ def google_login_or_register():
 
     return res.user
 
+def set_display_name_in_session(first_name: str, last_name: str):
+    first_name = (first_name or "").strip()
+    last_name = (last_name or "").strip()
+
+    user_name = f"{first_name} {last_name}".strip() or "user_1"
+
+    if first_name and last_name:
+        initials = f"{first_name[0].upper()}{last_name[0].upper()}"
+    elif first_name:
+        initials = first_name[0].upper()
+    elif last_name:
+        initials = last_name[0].upper()
+    else:
+        initials = "U1"
+
+    st.session_state["user_name"] = user_name
+    st.session_state["user_initials"] = initials
+
+
+    try:
+        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        if res and res.session and res.user:
+            _token_mgr().set_token(
+                email=res.user.email,
+                access_token=res.session.access_token,
+                refresh_token=res.session.refresh_token,
+                provider="app",
+            )
+        return res, None
+    except Exception as e:
+        # Show the real error during debugging
+        return None, str(e)
 
 def logout():
     try:
