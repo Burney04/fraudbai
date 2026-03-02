@@ -4,19 +4,6 @@ from FraudShield.utils.auth import register_with_email, google_auth_link, google
 from FraudShield.utils.supabase_client import supabase
 
 def show():
-    # Handle Google callback if returned
-    if google_login_or_register():
-        user_res = supabase.auth.get_user()
-        st.write("DEBUG supabase user:", getattr(user_res.user, "email", None) if user_res else None)
-
-        if user_res and user_res.user:
-            st.session_state.is_authenticated = True
-            st.session_state.user = user_res.user
-            st.session_state.page = "dashboard"
-            st.rerun()
-        else:
-            st.error("Google sign-in ran, but no Supabase user session was found.")
-
     def is_valid_email(email: str) -> bool:
         return re.match(r"[^@]+@[^@]+\.[^@]+", email)
 
