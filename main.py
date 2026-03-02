@@ -13,11 +13,7 @@ if "GOOGLE_CLIENT_SECRET_JSON" in st.secrets and not os.path.exists("client_secr
 # 2. IMPORTS
 import login
 import register
-from FraudShield.dashboard import show as show_dashboard
-
-# Then use it
-if st.session_state.page == "dashboard":
-    show_dashboard()
+from FraudShield import dashboard
 from FraudShield.utils.session import init_session_state, restore_session_from_cookie
 from FraudShield.utils.auth import google_login_or_register
 
