@@ -11,7 +11,6 @@ import json
 import requests
 from google.oauth2 import id_token as google_id_token
 from google.auth.transport import requests as google_requests
-from pathlib import Path
 
 GOOGLE_SCOPES = [
     "openid",
@@ -52,7 +51,7 @@ def _token_mgr() -> AuthTokenManager:
 
 
 def profile_exists(email: str) -> bool:
-    """Check if a profile exists for the given email."""
+    # Assumes you have a public.profiles table with an email column
     res = supabase.table("profiles").select("email").eq("email", email).limit(1).execute()
     return bool(res.data)
 
@@ -62,81 +61,30 @@ def create_profile(
     first_name: Optional[str] = None,
     last_name: Optional[str] = None
 ):
-    """Create a new profile in the database."""
     payload = {"email": email, "first_name": first_name, "last_name": last_name}
     return supabase.table("profiles").insert(payload).execute()
 
 
-def get_profile_names(email: str) -> dict:
-    """Return {'first_name':..., 'last_name':...} from profiles table."""
-    try:
-        res = (
-            supabase.table("profiles")
-            .select("first_name,last_name")
-            .eq("email", email)
-            .limit(1)
-            .execute()
-        )
-        if res and getattr(res, "data", None):
-            return res.data[0] if len(res.data) else {}
-    except Exception:
-        pass
-    return {}
-
-
-def set_display_name_in_session(first_name: str, last_name: str):
-    """Set user display name in session state."""
-    first_name = (first_name or "").strip()
-    last_name = (last_name or "").strip()
-
-    user_name = f"{first_name} {last_name}".strip() or "user_1"
-
-    if first_name and last_name:
-        initials = f"{first_name[0].upper()}{last_name[0].upper()}"
-    elif first_name:
-        initials = first_name[0].upper()
-    elif last_name:
-        initials = last_name[0].upper()
-    else:
-        initials = "U1"
-
-    st.session_state["user_name"] = user_name
-    st.session_state["user_initials"] = initials
-
-
 def login_with_email(email: str, password: str):
-    """Login with email and password."""
-    # Always returns: (res, err)
-    try:
-        if not profile_exists(email):
-            return None, "Account not found. Please register first."
-    except Exception as e:
-        return None, f"Profile check failed: {e}"
+    if not profile_exists(email):
+        return None, "Account not found. Please register first."
 
     try:
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-
-        if res and getattr(res, "session", None) and getattr(res, "user", None):
+        if res and res.session and res.user:
             _token_mgr().set_token(
                 email=res.user.email,
                 access_token=res.session.access_token,
                 refresh_token=res.session.refresh_token,
                 provider="app",
             )
-            
-            # Load profile names into session
-            prof = get_profile_names(res.user.email)
-            set_display_name_in_session(prof.get("first_name", ""), prof.get("last_name", ""))
-            
-            return res, None
-
-        return None, "Login failed: no session/user returned."
+        return res, None
     except Exception as e:
+        # Show the real error during debugging
         return None, str(e)
 
 
 def register_with_email(email: str, password: str, first_name: str, last_name: str):
-    """Register a new user with email and password."""
     if profile_exists(email):
         st.error("❌ This email is already registered. Please login.")
         return None
@@ -150,7 +98,7 @@ def register_with_email(email: str, password: str, first_name: str, last_name: s
             }
         )
 
-        # Create profile row immediately
+        # Create profile row immediately (works even if email confirmation is enabled)
         create_profile(email=email, first_name=first_name, last_name=last_name)
 
         return res
@@ -160,7 +108,6 @@ def register_with_email(email: str, password: str, first_name: str, last_name: s
 
 
 def _google_flow():
-    """Create Google OAuth flow object."""
     cfg = _load_google_client()
 
     redirect_uri = os.getenv("GOOGLE_REDIRECT_URI")
@@ -168,9 +115,13 @@ def _google_flow():
         try:
             redirect_uri = st.secrets.get("GOOGLE_REDIRECT_URI")
         except Exception:
-            redirect_uri = "http://localhost:8501"
+            redirect_uri = "http://localhost:8502"
 
     redirect_uri = redirect_uri.strip()
+
+    # DEBUG (temporary)
+    st.write("DEBUG oauth client_id:", cfg.get("client_id"))
+    st.write("DEBUG redirect_uri:", redirect_uri)
 
     flow = google_auth_oauthlib.flow.Flow.from_client_config(
         {"web": cfg},
@@ -180,11 +131,32 @@ def _google_flow():
     return flow
 
 
+# 1. First, define the URL generator
+def get_google_auth_url(mode: str = "login"):
+    client_config = _load_google_client()
+    
+    # Ensure this matches your Google Console exactly
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI")
+    if not redirect_uri:
+        try:
+            redirect_uri = st.secrets.get("GOOGLE_REDIRECT_URI")
+        except:
+            redirect_uri = "https://fraudshield-app.streamlit.app" # Hardcode fallback
+
+    flow = google_auth_oauthlib.flow.Flow.from_client_config(
+        {"web": client_config},
+        scopes=GOOGLE_SCOPES,
+        redirect_uri=redirect_uri.strip()
+    )
+    
+    # We remove 'state' temporarily to ensure no mismatch 403s
+    authorization_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true"
+    )
+    return authorization_url
+
 def google_auth_link(label: str, mode: str):
-    """
-    mode: 'login' or 'register'
-    Creates a button that redirects to Google OAuth.
-    """
     flow = _google_flow()
     auth_url, _ = flow.authorization_url(
         access_type="offline",
@@ -192,40 +164,31 @@ def google_auth_link(label: str, mode: str):
         state=mode,
         prompt="select_account",
     )
+    st.write("DEBUG auth_url:", auth_url)  # <-- add this line
 
-    if st.button(label, use_container_width=True):
-        st.markdown(
-            f"<meta http-equiv='refresh' content='0; url={auth_url}'>",
-            unsafe_allow_html=True,
-        )
-        st.stop()
-
+    st.link_button(label, auth_url, use_container_width=True)
 
 def handle_google_callback():
-    """Handle the Google OAuth callback and exchange code for tokens."""
     qp = dict(st.query_params)
     if "code" not in qp:
         return None
 
-    # Store debug info
+    # keep debug for your UI
     st.session_state["_last_google_qp"] = qp
 
     code = qp["code"]
     mode = qp.get("state") or "login"
 
-    # Immediately clear query parameters to prevent reuse
-    st.query_params.clear()
-
     cfg = _load_google_client()
     client_id = cfg["client_id"]
     client_secret = cfg["client_secret"]
-    
+
     redirect_uri = os.getenv("GOOGLE_REDIRECT_URI")
     if not redirect_uri:
         try:
-            redirect_uri = st.secrets.get("GOOGLE_REDIRECT_URI")
+               redirect_uri = st.secrets.get("GOOGLE_REDIRECT_URI")
         except Exception:
-            redirect_uri = "http://localhost:8501"
+            redirect_uri = "http://localhost:8502"
 
     redirect_uri = redirect_uri.strip()
 
@@ -240,63 +203,60 @@ def handle_google_callback():
         },
         timeout=20,
     )
-
-    if token_res.status_code != 200:
-        st.session_state.google_error = f"Token exchange failed: {token_res.status_code} - {token_res.text}"
-        return None
-
+    token_res.raise_for_status()
     token_json = token_res.json()
-    id_token = token_json.get("id_token")
-    if not id_token:
-        st.session_state.google_error = "No id_token returned by Google token exchange."
+
+    idt = token_json.get("id_token")
+    if not idt:
+        st.error("No id_token returned by Google token exchange.")
         return None
 
-    try:
-        info = google_id_token.verify_oauth2_token(
-            id_token, google_requests.Request(), client_id
-        )
-    except Exception as e:
-        st.session_state.google_error = f"ID token verification failed: {e}"
-        return None
-
+    info = google_id_token.verify_oauth2_token(
+        idt, google_requests.Request(), client_id
+    )
     email = info.get("email")
-    if not email:
-        st.session_state.google_error = "No email in verified token."
-        return None
 
-    return {"mode": mode, "email": email, "id_token": id_token}
+    # clear AFTER successful processing
+    st.query_params.clear()
 
-
+    return {"mode": mode, "email": email, "id_token": idt}
+    
+    
 def google_login_or_register():
-    """Complete Google OAuth flow and sign in/register with Supabase."""
-    # Clear any previous error
-    st.session_state.pop("google_error", None)
-
-    # If already authenticated, don't process
-    if st.session_state.get("is_authenticated"):
+    try:
+        payload = handle_google_callback()
+    except Exception as e:
+        st.error(f"❌ Google callback failed: {e}")
         return None
 
-    payload = handle_google_callback()
-    if payload is None:
+    if not payload:
         return None
 
-    email = payload["email"]
-    id_token = payload["id_token"]
+    email = payload.get("email")
+    id_token = payload.get("id_token")
+
+    st.write("DEBUG google email:", email)
+    st.write("DEBUG has id_token:", bool(id_token))
+
+    if not email or not id_token:
+        st.error("❌ Google auth failed (missing email or id_token).")
+        return None
 
     try:
         res = supabase.auth.sign_in_with_id_token({"provider": "google", "token": id_token})
+        st.write("DEBUG supabase sign_in_with_id_token ok:", bool(res and res.user))
     except Exception as e:
-        st.session_state.google_error = f"Supabase Google sign-in failed: {e}"
+        st.error(f"❌ Supabase Google sign-in failed: {e}")
         return None
 
     if not (res and res.session and res.user):
-        st.session_state.google_error = "Supabase sign-in returned no user or session."
+        st.error("❌ Supabase Google sign-in failed (no session returned).")
         return None
 
-    # Make the client adopt the session
+    # Make the client adopt the session (important for future get_user calls)
     supabase.auth.set_session(res.session.access_token, res.session.refresh_token)
 
-    # Persist tokens in cookie
+    # Persist tokens
     _token_mgr().set_token(
         email=res.user.email,
         access_token=res.session.access_token,
@@ -304,78 +264,39 @@ def google_login_or_register():
         provider="google",
     )
 
-    # Load profile names into session
-    prof = get_profile_names(res.user.email)
-    set_display_name_in_session(prof.get("first_name", ""), prof.get("last_name", ""))
+    from pathlib import Path
+    import json
+    import os
 
-    # Write local session file for debugging (only in development)
-    if not os.getenv("STREAMLIT_SERVER_HEADLESS"):  # Not set on cloud
-        try:
-            Path(".local_session.json").write_text(
-                json.dumps({
+    # Only write local debug session file when running locally
+    if not os.getenv("STREAMLIT_SERVER_HEADLESS"):  # usually set on cloud/server runs
+        Path(".local_session.json").write_text(
+            json.dumps(
+                {
                     "access_token": res.session.access_token,
                     "refresh_token": res.session.refresh_token,
                     "email": res.user.email,
-                }, indent=2),
-                encoding="utf-8",
-            )
-        except Exception:
-            pass
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
-    # Ensure profile exists
+    # Ensure profile exists (don’t block login if it fails)
     try:
         if not profile_exists(res.user.email):
             create_profile(email=res.user.email)
     except Exception as e:
-        st.warning(f"⚠️ Profile creation/check failed: {e}")
+        st.warning(f"⚠️ Logged in, but profile creation/check failed: {e}")
 
     return res.user
 
 
-def restore_supabase_session_from_cookie() -> bool:
-    """
-    Restores supabase session using tokens stored in the AuthTokenManager cookie.
-    Call this early in your Streamlit app (before you check auth state).
-    """
-    try:
-        decoded = _token_mgr().get_decoded_token()
-        if not decoded:
-            return False
-
-        access_token = decoded.get("access_token")
-        refresh_token = decoded.get("refresh_token")
-        if not access_token or not refresh_token:
-            return False
-
-        # Adopt the session for Supabase client
-        supabase.auth.set_session(access_token, refresh_token)
-        
-        # Verify the session works
-        user_res = supabase.auth.get_user()
-        if user_res and user_res.user:
-            # Load profile names into session
-            prof = get_profile_names(user_res.user.email)
-            set_display_name_in_session(prof.get("first_name", ""), prof.get("last_name", ""))
-            return True
-        return False
-    except Exception:
-        return False
-
-
 def logout():
-    """Logout user and clear all session data."""
     try:
         supabase.auth.sign_out()
     except Exception:
         pass
-    
     _token_mgr().delete_token()
-    
-    # Clean up local session file if it exists
-    try:
-        Path(".local_session.json").unlink(missing_ok=True)
-    except Exception:
-        pass
-    
     st.session_state.clear()
     st.rerun()
