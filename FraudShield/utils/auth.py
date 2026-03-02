@@ -164,32 +164,9 @@ def google_auth_link(label: str, mode: str):
         state=mode,
         prompt="select_account",
     )
-    
-    # Custom HTML link that opens in same tab
-    link_html = f"""
-    <div style="display: flex; justify-content: center; margin: 5px 0;">
-        <a href="{auth_url}" 
-           target="_self"
-           style="background-color: white; 
-                  color: black; 
-                  padding: 10px 24px; 
-                  border: 1px solid #ccc; 
-                  border-radius: 4px; 
-                  text-decoration: none;
-                  display: inline-block;
-                  width: 100%;
-                  text-align: center;
-                  font-size: 16px;
-                  font-weight: 400;
-                  line-height: 1.5;
-                  cursor: pointer;
-                  box-sizing: border-box;">
-            {label}
-        </a>
-    </div>
-    """
-    
-    st.markdown(link_html, unsafe_allow_html=True)
+    st.write("DEBUG auth_url:", auth_url)  # <-- add this line
+
+    st.link_button(label, auth_url, use_container_width=True)
 
 def handle_google_callback():
     qp = dict(st.query_params)
