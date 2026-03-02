@@ -1,28 +1,53 @@
 import os
 import streamlit as st
 
-# 1. LOAD ENV VARS FIRST
+# Load .env for local development (optional)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+def get_env_or_secret(key):
+    """Get from environment variable or st.secrets safely."""
+    # First try environment variable
+    value = os.getenv(key)
+    if value is not None:
+        return value
+    # Then try st.secrets, but only if accessible without error
+    try:
+        # Accessing st.secrets directly might raise, but using 'in' also triggers parse.
+        # We'll use a try-except to catch any exception (FileNotFoundError, etc.)
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        # secrets not available (e.g., no secrets.toml file), ignore
+        pass
+    return None
+
+# Populate environment variables from either source
 for k in ["SUPABASE_URL", "SUPABASE_KEY", "TOKEN_KEY", "GOOGLE_REDIRECT_URI"]:
-    if k in st.secrets:
-        os.environ[k] = str(st.secrets[k])
+    v = get_env_or_secret(k)
+    if v:
+        os.environ[k] = v
 
-if "GOOGLE_CLIENT_SECRET_JSON" in st.secrets and not os.path.exists("client_secret.json"):
+# Handle GOOGLE_CLIENT_SECRET_JSON (for cloud secrets)
+client_secret_json = get_env_or_secret("GOOGLE_CLIENT_SECRET_JSON")
+if client_secret_json and not os.path.exists("client_secret.json"):
     with open("client_secret.json", "w", encoding="utf-8") as f:
-        f.write(str(st.secrets["GOOGLE_CLIENT_SECRET_JSON"]))
+        f.write(client_secret_json)
 
-# 2. IMPORTS
+# Now import your modules
 import login
 import register
 from FraudShield import dashboard
 from FraudShield.utils.session import init_session_state, restore_session_from_cookie
 from FraudShield.utils.auth import google_login_or_register
 
-# 3. INITIALIZE SESSION
+# Initialize session
 init_session_state()
 
-# 4. THE INTERCEPTOR (CRITICAL FIX)
-# We check for the Google 'code' BEFORE doing anything else.
-# 4. THE INTERCEPTOR (STRENGTHENED)
+# Handle Google OAuth callback BEFORE any page rendering
 if "code" in st.query_params:
     try:
         user = google_login_or_register()
@@ -33,18 +58,17 @@ if "code" in st.query_params:
             st.query_params.clear()
             st.rerun()
         else:
-            # THIS PREVENTS THE JSON DUMP BY STOPPING THE SCRIPT
             st.error("Google Auth failed to return a user session.")
-            st.stop() 
+            st.stop()
     except Exception as e:
         st.error(f"Critical Auth Error: {e}")
         st.stop()
 
-# 5. RESTORE EXISTING SESSION
+# Restore existing session if not authenticated
 if not st.session_state.is_authenticated:
     restore_session_from_cookie()
 
-# 6. ROUTING LOGIC
+# Routing
 if st.session_state.is_authenticated:
     st.session_state.page = "dashboard"
 elif "page" not in st.session_state:
