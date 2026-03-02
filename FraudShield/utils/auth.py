@@ -120,8 +120,8 @@ def _google_flow():
     redirect_uri = redirect_uri.strip()
 
     # DEBUG (temporary)
-    st.write("DEBUG oauth client_id:", cfg.get("client_id"))
-    st.write("DEBUG redirect_uri:", redirect_uri)
+    # st.write("DEBUG oauth client_id:", cfg.get("client_id"))
+    # st.write("DEBUG redirect_uri:", redirect_uri)
 
     flow = google_auth_oauthlib.flow.Flow.from_client_config(
         {"web": cfg},
@@ -164,7 +164,7 @@ def google_auth_link(label: str, mode: str):
         state=mode,
         prompt="select_account",
     )
-    st.write("DEBUG auth_url:", auth_url)  # <-- add this line
+    # st.write("DEBUG auth_url:", auth_url)  # <-- add this line
 
     st.link_button(label, auth_url, use_container_width=True)
 
