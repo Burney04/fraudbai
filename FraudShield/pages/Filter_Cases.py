@@ -287,23 +287,27 @@ def show():
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.subheader("📈 Summary Statistics")
         
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            total_amount = filtered_df['transaction_amount'].sum()
-            st.metric("Total Amount", f"${total_amount:,.2f}")
-        
-        with col2:
-            avg_risk = filtered_df['risk_score'].mean()
-            st.metric("Avg Risk Score", f"{avg_risk:.3f}")
-        
-        with col3:
-            fraud_count = filtered_df[filtered_df['fraud_label'] == 1].shape[0]
-            st.metric("Fraud Cases", f"{fraud_count:,}")
-        
-        with col4:
-            fraud_rate = (fraud_count / len(filtered_df)) * 100 if len(filtered_df) > 0 else 0
-            st.metric("Fraud Rate", f"{fraud_rate:.1f}%")
+       # Summary statistics - add this check
+        if len(filtered_df) > 0:
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                total_amount = filtered_df['transaction_amount'].sum()
+                st.metric("Total Amount", f"${total_amount:,.2f}")
+            
+            with col2:
+                avg_risk = filtered_df['risk_score'].mean()
+                st.metric("Avg Risk Score", f"{avg_risk:.3f}")
+            
+            with col3:
+                fraud_count = filtered_df[filtered_df['fraud_label'] == 1].shape[0]
+                st.metric("Fraud Cases", f"{fraud_count:,}")
+            
+            with col4:
+                fraud_rate = (fraud_count / len(filtered_df)) * 100 if len(filtered_df) > 0 else 0
+                st.metric("Fraud Rate", f"{fraud_rate:.1f}%")
+        else:
+            st.info("No data to display statistics")
         
         st.markdown("</div>", unsafe_allow_html=True)
         

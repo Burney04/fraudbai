@@ -16,12 +16,10 @@ def get_env_or_secret(key):
         return value
     # Then try st.secrets, but only if accessible without error
     try:
-        # Accessing st.secrets directly might raise, but using 'in' also triggers parse.
-        # We'll use a try-except to catch any exception (FileNotFoundError, etc.)
         if key in st.secrets:
             return st.secrets[key]
     except Exception:
-        # secrets not available (e.g., no secrets.toml file), ignore
+        # secrets not available, ignore
         pass
     return None
 
@@ -30,6 +28,10 @@ for k in ["SUPABASE_URL", "SUPABASE_KEY", "TOKEN_KEY", "GOOGLE_REDIRECT_URI"]:
     v = get_env_or_secret(k)
     if v:
         os.environ[k] = v
+
+# Set default for GOOGLE_REDIRECT_URI if still missing
+if "GOOGLE_REDIRECT_URI" not in os.environ:
+    os.environ["GOOGLE_REDIRECT_URI"] = "http://localhost:8501"
 
 # Handle GOOGLE_CLIENT_SECRET_JSON (for cloud secrets)
 client_secret_json = get_env_or_secret("GOOGLE_CLIENT_SECRET_JSON")

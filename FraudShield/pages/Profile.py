@@ -1,7 +1,7 @@
 import streamlit as st
 from FraudShield.utils.supabase_client import supabase
 from FraudShield.utils.auth import logout as do_logout
-from FraudShield.utils.auth import set_display_name_in_session  # Add this import
+from FraudShield.utils.auth import set_display_name_in_session
 
 
 def _get_current_user():
@@ -30,11 +30,14 @@ def _load_profile(email: str) -> dict:
             .limit(1)
             .execute()
         )
-        if res and getattr(res, "data", None):
-            return res.data[0] if len(res.data) else {}
+        if res and getattr(res, "data", None) and len(res.data) > 0:
+            return res.data[0]
+        else:
+            # Return empty dict with defaults, will be created on save
+            return {}
     except Exception as e:
         st.error(f"❌ Failed to load profile: {e}")
-    return {}
+        return {}
 
 
 def _update_profile(email: str, payload: dict) -> bool:
@@ -45,24 +48,15 @@ def _update_profile(email: str, payload: dict) -> bool:
         
         if res.data:  # Profile exists, update it
             result = supabase.table("profiles").update(payload).eq("email", email).execute()
-            if not result.data:
-                st.error("❌ Update returned no data - profile might not exist")
-                return False
+            # Even if result.data is empty, the update might have succeeded
             return True
         else:  # Profile doesn't exist, create it
             payload["email"] = email
             result = supabase.table("profiles").insert(payload).execute()
-            if result.data:
-                return True
-            else:
-                st.error("❌ Failed to create profile")
-                return False
+            return bool(result.data)
                 
     except Exception as e:
         st.error(f"❌ Failed to update profile: {str(e)}")
-        # Try to get more details about the error
-        if hasattr(e, 'message'):
-            st.error(f"Error details: {e.message}")
         return False
 
 
@@ -161,11 +155,15 @@ def show():
             save = st.form_submit_button("💾 Save Changes", use_container_width=True, key="profile_save")
 
         if save:
+            # === FIXED: Include ALL fields in the payload ===
             update_payload = {
                 "first_name": first_name_input.strip(),
                 "last_name": last_name_input.strip(),
-
+                "department": department_input,
+                "phone": phone_input.strip(),
+                "role": role_input,
             }
+            # === END OF FIX ===
             
             # Validate input
             if not first_name_input.strip() or not last_name_input.strip():
@@ -213,13 +211,18 @@ def show():
                 st.error("Password should be at least 8 characters.")
             else:
                 try:
-                    result = supabase.auth.update_user({"password": new})
-                    if result:
-                        st.success("✅ Password updated successfully!")
-                        # Clear the password fields
-                        st.rerun()
-                    else:
-                        st.error("❌ Password update failed.")
+                    # Add confirmation checkbox for password change
+                    st.info("Note: You will be logged out after changing your password.")
+                    confirm_checkbox = st.checkbox("I understand and want to proceed", key="pw_confirm_checkbox")
+                    
+                    if confirm_checkbox:
+                        result = supabase.auth.update_user({"password": new})
+                        if result:
+                            st.success("✅ Password updated successfully! Please log in again.")
+                            st.session_state.page = "login"
+                            st.rerun()
+                        else:
+                            st.error("❌ Password update failed.")
                 except Exception as e:
                     st.error(f"❌ Password update failed: {str(e)}")
 

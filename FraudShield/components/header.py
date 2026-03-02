@@ -3,6 +3,7 @@ from FraudShield.utils.supabase_client import supabase
 
 @st.cache_data(ttl=300)
 def _load_profile_by_email(email: str) -> dict:
+    """Load user profile from Supabase with caching."""
     try:
         res = (
             supabase.table("profiles")
@@ -13,11 +14,13 @@ def _load_profile_by_email(email: str) -> dict:
         )
         if res and getattr(res, "data", None):
             return res.data[0] if len(res.data) else {}
-    except Exception:
-        pass
+    except Exception as e:
+        # Log error but don't crash
+        print(f"Error loading profile: {e}")
     return {}
 
 def _compute_name_and_initials(first_name: str, last_name: str):
+    """Generate display name and initials from first/last name."""
     first_name = (first_name or "").strip()
     last_name = (last_name or "").strip()
 
@@ -37,12 +40,13 @@ def _compute_name_and_initials(first_name: str, last_name: str):
     return full_name, initials
 
 def render_header(selected_page):
+    """Render the app header with user info and navigation."""
     # 1) Prefer values already stored in session_state
     user_name = st.session_state.get("user_name", "User 1")
     user_initials = st.session_state.get("user_initials", "U1")
 
     # 2) If not available yet, try to load from Supabase
-    if not user_name or not user_initials:
+    if not user_name or not user_initials or user_name == "User 1":
         user = st.session_state.get("user")
 
         if not user:
@@ -66,10 +70,10 @@ def render_header(selected_page):
             st.session_state["user_initials"] = user_initials
 
     # 3) Final fallback
-    if not user_name:
-        user_name = "Aida Affendi"
-    if not user_initials:
-        user_initials = "AA"
+    if not user_name or user_name == "User 1":
+        user_name = "User"
+    if not user_initials or user_initials == "U1":
+        user_initials = "U"
 
     # --- HEADER LAYOUT ---
     col1, col2 = st.columns([4, 1])
@@ -86,17 +90,13 @@ def render_header(selected_page):
         )
 
     with col2:
-        # Create a container with better styling
-        with st.container():
-            # Use columns to center the button
-            col_left, col_center, col_right = st.columns([1, 3, 1])
-            with col_center:
-                profile_clicked = st.button(
-                    f"👤 {user_name}",
-                    key="header_profile_button",
-                    use_container_width=True,
-                    help="Click to go to your profile"
-                )
+        # Create a clickable profile button
+        profile_clicked = st.button(
+            f"👤 {user_name}",
+            key="header_profile_button",
+            use_container_width=True,
+            help="Click to go to your profile"
+        )
                 
         if profile_clicked:
             # Set the active page to Profile (matching the sidebar)

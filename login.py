@@ -1,9 +1,12 @@
 import streamlit as st
 import re
 from FraudShield.utils.auth import login_with_email, google_auth_link, get_profile_names, set_display_name_in_session
-from FraudShield.utils.supabase_client import supabase
 
 def show():
+    # Optional debug (you can remove these later)
+    # st.write("DEBUG query params:", dict(st.query_params))
+    # st.write("DEBUG auth:", st.session_state.get("is_authenticated"))
+
     def is_valid_email(email: str) -> bool:
         return re.match(r"[^@]+@[^@]+\.[^@]+", email)
 
@@ -53,6 +56,7 @@ def show():
                     st.session_state.is_authenticated = True
                     st.session_state.user = res.user
 
+                    # Set display name in session
                     prof = get_profile_names(res.user.email)
                     set_display_name_in_session(prof.get("first_name", ""), prof.get("last_name", ""))
 
@@ -61,10 +65,10 @@ def show():
                 else:
                     st.error(f"❌ Login failed: {err or 'Invalid email or password'}")
 
-
     st.divider()
 
-    # Google login link (mode=login enforces your “must exist” rule)
+    # Google login link
+    # Note: The actual callback is handled in main.py, this just initiates the flow
     google_auth_link("🔐 Sign in with Google", mode="login")
 
     # Register redirect
