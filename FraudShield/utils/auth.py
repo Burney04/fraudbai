@@ -157,6 +157,10 @@ def get_google_auth_url(mode: str = "login"):
     return authorization_url
 
 def google_auth_link(label: str, mode: str):
+    """
+    mode: 'login' or 'register'
+    Redirects in the SAME tab to avoid Streamlit session reset.
+    """
     flow = _google_flow()
     auth_url, _ = flow.authorization_url(
         access_type="offline",
@@ -164,9 +168,14 @@ def google_auth_link(label: str, mode: str):
         state=mode,
         prompt="select_account",
     )
-    st.write("DEBUG auth_url:", auth_url)  # <-- add this line
-
-    st.link_button(label, auth_url, use_container_width=True)
+    
+    # Use a button with meta refresh instead of link_button
+    if st.button(label, use_container_width=True):
+        st.markdown(
+            f"<meta http-equiv='refresh' content='0; url={auth_url}'>",
+            unsafe_allow_html=True,
+        )
+        st.stop()  # Stop the script execution
 
 def handle_google_callback():
     qp = dict(st.query_params)
