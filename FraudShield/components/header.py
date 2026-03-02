@@ -38,7 +38,7 @@ def _compute_name_and_initials(first_name: str, last_name: str):
 
 def render_header(selected_page):
     # 1) Prefer values already stored in session_state
-    user_name = st.session_state.get("user_name", "User 1")
+    user_name = st.session_state.get("user_name")
     user_initials = st.session_state.get("user_initials", "U1")
 
     # 2) If not available yet, try to load from Supabase

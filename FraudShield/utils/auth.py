@@ -235,8 +235,8 @@ def google_login_or_register():
     email = payload.get("email")
     id_token = payload.get("id_token")
 
-    st.write("DEBUG google email:", email)
-    st.write("DEBUG has id_token:", bool(id_token))
+    #st.write("DEBUG google email:", email)
+    #st.write("DEBUG has id_token:", bool(id_token))
 
     if not email or not id_token:
         st.error("❌ Google auth failed (missing email or id_token).")
@@ -244,7 +244,7 @@ def google_login_or_register():
 
     try:
         res = supabase.auth.sign_in_with_id_token({"provider": "google", "token": id_token})
-        st.write("DEBUG supabase sign_in_with_id_token ok:", bool(res and res.user))
+        #st.write("DEBUG supabase sign_in_with_id_token ok:", bool(res and res.user))
     except Exception as e:
         st.error(f"❌ Supabase Google sign-in failed: {e}")
         return None
