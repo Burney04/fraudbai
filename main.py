@@ -14,6 +14,7 @@ if "GOOGLE_CLIENT_SECRET_JSON" in st.secrets and not os.path.exists("client_secr
 import login
 import register
 from FraudShield import dashboard
+import reset_password
 from FraudShield.utils.session import init_session_state, restore_session_from_cookie
 from FraudShield.utils.auth import google_login_or_register
 
@@ -56,3 +57,5 @@ elif st.session_state.page == "register":
     register.show()
 elif st.session_state.page == "dashboard":
     dashboard.show()
+elif st.session_state.page == "reset_password":
+    reset_password.show()

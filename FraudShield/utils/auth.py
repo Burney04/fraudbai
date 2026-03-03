@@ -332,3 +332,33 @@ def logout():
     _token_mgr().delete_token()
     st.session_state.clear()
     st.rerun()
+
+def send_password_reset(email: str):
+    """
+    Send password reset email via Supabase.
+    Returns (success, message) tuple.
+    """
+    try:
+        if not email or '@' not in email:
+            return False, "Please enter a valid email address."
+        
+        # Get the base URL of your app
+        base_url = os.getenv("APP_URL", "http://localhost:8501")
+        
+        # Send reset email with redirect to reset page
+        supabase.auth.reset_password_for_email(
+            email,
+            {
+                "redirect_to": f"{base_url}/?page=reset_password"
+            }
+        )
+        
+        return True, f"✅ Password reset link sent to {email}. Please check your inbox."
+    except Exception as e:
+        error_msg = str(e)
+        if "rate limit" in error_msg.lower():
+            return False, "⏰ Too many reset attempts. Please wait an hour."
+        elif "Email not found" in error_msg:
+            return False, "No account found with this email address."
+        else:
+            return False, f"Failed to send reset email: {error_msg}"
