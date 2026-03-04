@@ -1,49 +1,84 @@
 import streamlit as st
+import pandas as pd
+from FraudShield.utils.supabase_client import supabase
+from datetime import datetime
 
 def show():
-    # --- Mock Validation Queue Data ---
-    validation_queue = [
-        {"id": "FR-2025-0842", "amount": "RM 8,500", "risk_score": 0.78, "status": "pending", "merchant": "TechMart Electronics", "bank": "Maybank"},
-        {"id": "FR-2025-0841", "amount": "RM 3,200", "risk_score": 0.68, "status": "pending", "merchant": "Online Store", "bank": "CIMB"},
-        {"id": "FR-2025-0840", "amount": "RM 12,300", "risk_score": 0.85, "status": "pending", "merchant": "Luxury Goods", "bank": "Public Bank"},
-        {"id": "FR-2025-0839", "amount": "RM 1,850", "risk_score": 0.52, "status": "pending", "merchant": "Restaurant", "bank": "RHB Bank"},
-        {"id": "FR-2025-0838", "amount": "RM 4,200", "risk_score": 0.76, "status": "pending", "merchant": "Gadget Store", "bank": "Hong Leong"},
-        {"id": "FR-2025-0837", "amount": "RM 6,700", "risk_score": 0.82, "status": "pending", "merchant": "Fashion Boutique", "bank": "AmBank"},
-        {"id": "FR-2025-0836", "amount": "RM 2,900", "risk_score": 0.71, "status": "pending", "merchant": "Travel Agency", "bank": "Maybank"},
-        {"id": "FR-2025-0835", "amount": "RM 5,400", "risk_score": 0.79, "status": "pending", "merchant": "Electronics Mall", "bank": "CIMB"},
-    ]
+    # --- Load Data from Supabase ---
+    @st.cache_data(ttl=60)  # Cache for 60 seconds
+    def load_fraud_cases():
+        """Load fraud cases from Supabase."""
+        try:
+            response = supabase.table("fraud_cases") \
+                .select("*") \
+                .order("transaction_date", desc=True) \
+                .execute()
+            
+            if response.data:
+                df = pd.DataFrame(response.data)
+                
+                # Add a status column for validation (all start as pending)
+                df['validation_status'] = 'pending'
+                
+                return df.to_dict('records')
+            else:
+                return []
+        except Exception as e:
+            st.error(f"Error loading fraud cases: {e}")
+            return []
 
-    # --- Initialize Session State ---
+    # Initialize session state
     def init_state():
         """Initialize Streamlit session state variables."""
         if "cases" not in st.session_state:
-            st.session_state.cases = validation_queue.copy()
+            st.session_state.cases = load_fraud_cases()
         if "selected_case_id" not in st.session_state:
             st.session_state.selected_case_id = None
         if "notes" not in st.session_state:
             st.session_state.notes = ""
 
-    # --- Helper Function ---
+    # --- Helper Functions ---
     def handle_validate(case_id, decision):
-        """Update case status and provide user feedback."""
+        """Update case validation status."""
+        # Update local session state
         for case_ in st.session_state.cases:
-            if case_["id"] == case_id:
-                case_["status"] = decision
+            if case_["case_id"] == case_id:
+                case_["validation_status"] = decision
+                
+                # Also update in Supabase (if you want to save validation results)
+                try:
+                    supabase.table("fraud_cases") \
+                        .update({"actual_fraud": decision}) \
+                        .eq("case_id", case_id) \
+                        .execute()
+                except Exception as e:
+                    st.error(f"Error updating database: {e}")
 
-        case_item = next((c for c in st.session_state.cases if c["id"] == case_id), None)
-        messages = {
-            "confirmed": f"✅ Case {case_id} confirmed as fraud. Customer will be notified.",
-            "rejected": f"🟢 Case {case_id} marked as legitimate. No action needed.",
-            "escalated": f"🟣 Case {case_id} escalated to supervisor for review.",
-        }
+        case_item = next((c for c in st.session_state.cases if c["case_id"] == case_id), None)
+        
+        # Get appropriate message based on decision
+        if decision == "confirmed":
+            messages = f"✅ Case {case_id} confirmed as fraud."
+            icon = "✅"
+        elif decision == "rejected":
+            messages = f"🟢 Case {case_id} marked as legitimate."
+            icon = "🟢"
+        else:  # escalated
+            messages = f"🟣 Case {case_id} escalated."
+            icon = "🟣"
 
         if case_item:
-            st.toast(messages[decision], icon="💬")
-            st.info(f"**Amount:** {case_item['amount']} | **Risk:** {case_item['risk_score']*100:.0f}%")
+            st.toast(messages, icon=icon)
 
         # Reset form state
         st.session_state.notes = ""
         st.session_state.selected_case_id = None
+
+    def refresh_data():
+        """Manually refresh data from Supabase."""
+        st.session_state.cases = load_fraud_cases()
+        st.cache_data.clear()
+        st.rerun()
 
     # --- Page Render Function ---
     def render():
@@ -54,123 +89,188 @@ def show():
         selected_case_id = st.session_state.selected_case_id
         notes = st.session_state.notes
 
-        pending_cases = [c for c in cases if c["status"] == "pending"]
-        validated_cases = [c for c in cases if c["status"] != "pending"]
-
-        # Identify possible retraining trigger
-        high_risk_rejected = [
-            c for c in validated_cases
-            if c["status"] == "rejected" and 0.75 <= c["risk_score"] <= 0.85
-        ]
-        needs_retraining = len(high_risk_rejected) >= 3
+        # All cases are pending (we're showing the full table)
+        pending_cases = cases
 
         # --- Header ---
-        st.title("🧾 Case Validation Queue")
+        st.title("🧾 Fraud Cases Table")
 
-        if needs_retraining:
-            st.warning(
-                f"⚠️ **Model Retraining Recommended:** {len(high_risk_rejected)} high-risk cases (75–85%) "
-                "were marked legitimate. The model may require retraining."
-            )
+        # Refresh button
+        col_title, col_refresh = st.columns([6, 1])
+        with col_refresh:
+            if st.button("🔄 Refresh Data", use_container_width=True):
+                refresh_data()
 
         st.info(
-            "ℹ️ This queue shows only *ambiguous* cases (40–89% risk) requiring human validation. "
-            "Cases ≥90% are automatically flagged as fraud."
+            "ℹ️ Showing all fraud cases from database. Select a case to validate."
         )
 
         # --- Stats Overview ---
-        st.markdown("### 📊 Validation Summary")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Pending Validation", len(pending_cases))
-        col2.metric("Confirmed Fraud", len([c for c in cases if c["status"] == "confirmed"]))
-        col3.metric("Legitimate (Rejected)", len([c for c in cases if c["status"] == "rejected"]))
-        col4.metric("Escalated", len([c for c in cases if c["status"] == "escalated"]))
+        st.markdown("### 📊 Database Summary")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Cases", len(cases))
+        
+        if cases:
+            # Get unique values for stats
+            unique_dates = len(set([c.get('transaction_date') for c in cases if c.get('transaction_date')]))
+            col2.metric("Date Range", f"{unique_dates} days")
+            
+            unique_risks = len(set([c.get('risk_display') for c in cases if c.get('risk_display')]))
+            col3.metric("Risk Levels", unique_risks)
 
         st.divider()
 
-        # --- Layout: Queue + Validation Panel ---
-        col_left, col_right = st.columns([2, 1])
+        # --- Main Content: Full Table Display ---
+        st.subheader("📋 Fraud Cases")
 
-        # --- Left Column: Pending Cases ---
-        with col_left:
-            st.subheader("🕵️ Ambiguous Cases")
-            if not pending_cases:
-                st.success("✅ All ambiguous cases have been validated!")
-                st.caption("Cases ≥90% risk are auto-flagged as fraud.")
-            else:
-                for case_ in pending_cases:
-                    color = (
-                        "#FDE68A" if case_["risk_score"] >= 0.8
-                        else "#FEF9C3" if case_["risk_score"] >= 0.6
-                        else "#DBEAFE"
-                    )
-                    border = "#3B82F6" if selected_case_id == case_["id"] else "#E5E7EB"
+        if not pending_cases:
+            st.warning("No cases found in database.")
+        else:
+            # Create a DataFrame for display
+            display_data = []
+            for case in pending_cases:
+                display_data.append({
+                    "Case ID": case.get('case_id', 'N/A'),
+                    "Date": case.get('transaction_date', 'N/A'),
+                    "Amount": case.get('amount_formatted', 'N/A'),
+                    "Risk": case.get('risk_display', 'N/A'),
+                    "Sentiment": case.get('sentiment', 'N/A'),
+                    "Fraud Terms": case.get('fraud_terms', 'N/A'),
+                    "Complaint Link": case.get('complaint_link', 'N/A'),
+                    "Customer History": case.get('customer_history', 'N/A'),
+                    "Actual Fraud": case.get('actual_fraud', 'N/A'),
+                })
+            
+            df_display = pd.DataFrame(display_data)
+            
+            # Show the full table
+            st.dataframe(
+                df_display,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Case ID": st.column_config.TextColumn("Case ID", width="medium"),
+                    "Date": st.column_config.DateColumn("Date", width="small"),
+                    "Amount": st.column_config.TextColumn("Amount", width="small"),
+                    "Risk": st.column_config.TextColumn("Risk", width="small"),
+                    "Sentiment": st.column_config.TextColumn("Sentiment", width="small"),
+                    "Fraud Terms": st.column_config.TextColumn("Fraud Terms", width="medium"),
+                    "Complaint Link": st.column_config.TextColumn("Complaint Link", width="medium"),
+                    "Customer History": st.column_config.TextColumn("Customer History", width="medium"),
+                    "Actual Fraud": st.column_config.TextColumn("Actual Fraud", width="small"),
+                }
+            )
 
-                    if st.button(
-                        f"{case_['id']} — {case_['merchant']} ({case_['bank']}) | 💰 {case_['amount']} | Risk {case_['risk_score']*100:.0f}%",
-                        key=f"case_{case_['id']}",
-                        help="Click to inspect this case",
-                    ):
-                        st.session_state.selected_case_id = case_["id"]
+            # Show row count
+            st.caption(f"Showing {len(pending_cases)} rows")
 
-                    st.markdown(
-                        f"<div style='background:{color};border:1px solid {border};border-radius:8px;"
-                        f"padding:10px;margin-bottom:6px;'>"
-                        f"<b>{case_['id']}</b> — {case_['merchant']} ({case_['bank']})<br>"
-                        f"<b>Amount:</b> {case_['amount']} | <b>Risk:</b> {case_['risk_score']*100:.0f}%"
-                        "</div>",
-                        unsafe_allow_html=True,
-                    )
+            st.divider()
 
-        # --- Right Column: Validation Panel ---
-        with col_right:
-            st.subheader("🧩 Validation Decision")
-            selected_case = next((c for c in cases if c["id"] == selected_case_id), None)
+            # --- Layout: Case Selection + Validation Panel ---
+            st.subheader("🔍 Case Validation")
 
-            if selected_case:
-                st.write(f"### Selected Case: `{selected_case['id']}`")
-                st.caption(f"{selected_case['merchant']} • {selected_case['bank']}")
-                st.write(f"**Amount:** {selected_case['amount']} | **Risk:** {selected_case['risk_score']*100:.0f}%")
+            col_left, col_right = st.columns([1, 1])
 
-                st.text_area(
-                    "💬 Feedback Notes",
-                    value=notes,
-                    placeholder="Add your feedback here...",
-                    key="notes",
+            # --- Left Column: Case Selector ---
+            with col_left:
+                st.markdown("### Select a Case")
+                
+                # Create a dropdown for case selection
+                case_options = {f"{c['case_id']} - {c.get('amount_formatted', 'N/A')} ({c.get('risk_display', 'N/A')})": c['case_id'] 
+                               for c in pending_cases}
+                
+                selected_display = st.selectbox(
+                    "Choose a case to validate:",
+                    options=list(case_options.keys()),
+                    index=None,
+                    placeholder="Select a case...",
+                    key="case_selector"
                 )
+                
+                if selected_display:
+                    selected_case_id = case_options[selected_display]
+                    st.session_state.selected_case_id = selected_case_id
 
-                st.write("---")
-                col_a, col_b, col_c = st.columns(3)
-                with col_a:
-                    if st.button("✅ Confirm Fraud", use_container_width=True):
-                        handle_validate(selected_case["id"], "confirmed")
-                with col_b:
-                    if st.button("🟢 Legitimate", use_container_width=True):
-                        handle_validate(selected_case["id"], "rejected")
-                with col_c:
-                    if st.button("🟣 Escalate", use_container_width=True):
-                        handle_validate(selected_case["id"], "escalated")
-            else:
-                st.info("Select a case from the queue to validate.")
+                # Show selected case details
+                if st.session_state.selected_case_id:
+                    selected_case = next((c for c in pending_cases if c["case_id"] == st.session_state.selected_case_id), None)
+                    
+                    if selected_case:
+                        st.markdown("### Selected Case Details")
+                        
+                        # Create a nice details view
+                        details_df = pd.DataFrame([
+                            {"Field": "Case ID", "Value": selected_case.get('case_id', 'N/A')},
+                            {"Field": "Date", "Value": selected_case.get('transaction_date', 'N/A')},
+                            {"Field": "Amount", "Value": selected_case.get('amount_formatted', 'N/A')},
+                            {"Field": "Risk", "Value": selected_case.get('risk_display', 'N/A')},
+                            {"Field": "Sentiment", "Value": selected_case.get('sentiment', 'N/A')},
+                            {"Field": "Fraud Terms", "Value": selected_case.get('fraud_terms', 'N/A')},
+                            {"Field": "Complaint Link", "Value": selected_case.get('complaint_link', 'N/A')},
+                            {"Field": "Customer History", "Value": selected_case.get('customer_history', 'N/A')},
+                            {"Field": "Current Actual Fraud", "Value": selected_case.get('actual_fraud', 'Not set')},
+                        ])
+                        
+                        st.dataframe(details_df, hide_index=True, use_container_width=True)
 
+            # --- Right Column: Validation Panel ---
+            with col_right:
+                if st.session_state.selected_case_id:
+                    selected_case = next((c for c in pending_cases if c["case_id"] == st.session_state.selected_case_id), None)
+                    
+                    if selected_case:
+                        st.markdown("### Make a Decision")
+                        
+                        # Notes field
+                        notes = st.text_area(
+                            "📝 Validation Notes",
+                            value=st.session_state.notes,
+                            placeholder="Add your feedback or observations here...",
+                            height=100,
+                            key="validation_notes"
+                        )
+                        st.session_state.notes = notes
+                        
+                        st.markdown("#### Choose Action:")
+                        
+                        # Decision buttons
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            if st.button("✅ Confirm Fraud", use_container_width=True, type="primary"):
+                                handle_validate(selected_case["case_id"], "confirmed")
+                        with col_b:
+                            if st.button("🟢 Legitimate", use_container_width=True):
+                                handle_validate(selected_case["case_id"], "rejected")
+                        with col_c:
+                            if st.button("🟣 Escalate", use_container_width=True):
+                                handle_validate(selected_case["case_id"], "escalated")
+                        
+                        st.divider()
+                        
+                        # Quick stats for this case
+                        st.markdown("#### Case Insights")
+                        risk_value = selected_case.get('risk_display', 'N/A')
+                        if 'High' in risk_value:
+                            st.warning("⚠️ High risk case - review carefully")
+                        elif 'Medium' in risk_value:
+                            st.info("ℹ️ Medium risk case")
+                        else:
+                            st.success("✅ Low risk case")
+                            
+                else:
+                    st.info("👆 Select a case from the left panel to begin validation")
+
+        # --- Footer with export option ---
         st.divider()
+        if st.button("📥 Export Table to CSV", use_container_width=True):
+            if cases:
+                export_df = pd.DataFrame(cases)
+                csv = export_df.to_csv(index=False)
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name=f"fraud_cases_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
 
-        # --- Validated Cases History ---
-        if validated_cases:
-            st.subheader("📜 Recently Validated")
-            for case_ in validated_cases:
-                color = (
-                    "green" if case_["status"] == "confirmed"
-                    else "red" if case_["status"] == "rejected"
-                    else "purple"
-                )
-                st.markdown(
-                    f"<div style='background-color:{color}10;border:1px solid {color}30;"
-                    f"padding:10px;border-radius:8px;margin-bottom:4px;'>"
-                    f"**{case_['id']}** — {case_['amount']} | Risk: {case_['risk_score']*100:.0f}%<br>"
-                    f"<b>Status:</b> <span style='color:{color};text-transform:capitalize;'>"
-                    f"{case_['status']}</span>"
-                    "</div>",
-                    unsafe_allow_html=True,
-                )
     render()
