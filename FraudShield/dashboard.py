@@ -32,7 +32,7 @@ def show():
         st.rerun()
         
     # --------------------------------------------------
-    # 3️⃣ SIDEBAR NAVIGATION
+    # 3️⃣ SIDEBAR NAVIGATION (BUTTONS VERSION)
     # --------------------------------------------------
     st.sidebar.title("🧭 Navigation")
 
@@ -48,13 +48,29 @@ def show():
     if "active_page" not in st.session_state:
         st.session_state.active_page = list(pages.keys())[0]
 
-    selected = st.sidebar.radio(
-        "Select a page:",
-        options=list(pages.keys()),
-        index=list(pages.keys()).index(st.session_state.active_page),
-    )
-
-    st.session_state.active_page = selected
+    # Create buttons for each page
+    for page_name in pages.keys():
+        # Determine button style based on active page
+        if st.session_state.active_page == page_name:
+            # Active page button (primary style)
+            if st.sidebar.button(
+                page_name,
+                key=f"nav_{page_name}",
+                use_container_width=True,
+                type="primary"
+            ):
+                # Even if clicking the active page, we don't need to do anything
+                pass
+        else:
+            # Inactive page button (secondary style)
+            if st.sidebar.button(
+                page_name,
+                key=f"nav_{page_name}",
+                use_container_width=True,
+                type="secondary"
+            ):
+                st.session_state.active_page = page_name
+                st.rerun()
 
     # --------------------------------------------------
     # 4️⃣ HEADER
@@ -67,7 +83,7 @@ def show():
     # --------------------------------------------------
     # 5️⃣ PAGE RENDER
     # --------------------------------------------------
-    pages[selected]()
+    pages[st.session_state.active_page]()
 
     # --------------------------------------------------
     # 6️⃣ FOOTER
