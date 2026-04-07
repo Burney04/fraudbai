@@ -1,6 +1,10 @@
 import streamlit as st
 import plotly.express as px
 import pandas as pd
+from FraudShield.utils.supabase_client import supabase
+from datetime import datetime
+import time
+import re
 
 def render_reports():
     st.title("📊 Fraud Detection Reports")
@@ -8,9 +12,9 @@ def render_reports():
     st.divider()
 
     # --- Controls ---
-    period = st.selectbox("Select Period", ["1 month", "3 months", "6 months", "1 year"], index=2)
+    period = st.selectbox("Select Period", ["1 month", "3 months", "6 months", "1 year"], index=2, key="period_select")
     st.write(f"Currently viewing **{period}** trend.")
-    export = st.button("Export Report")
+    export = st.button("Export Report", key="export_report_btn")
     st.divider()
 
     # --- KPI Cards ---
@@ -34,6 +38,101 @@ def render_reports():
             )
 
     st.divider()
+
+    # --- Track notification state ---
+    if 'limit_version' not in st.session_state:
+        st.session_state.limit_version = 1
+    if 'notification_shown_for_version' not in st.session_state:
+        st.session_state.notification_shown_for_version = None
+
+    # --- Define the display limit - CHANGE THIS NUMBER TO TEST ---
+    # Change this from 1000 to 1001 to see the notification
+    CURRENT_LIMIT = 1000  # <-- CHANGE THIS TO 1001 TO TEST
+
+    # Check if the limit has been increased (version tracking)
+    if CURRENT_LIMIT > st.session_state.limit_version:
+        # Show toast notification
+        new_cases = CURRENT_LIMIT - st.session_state.limit_version
+        st.toast(f"🔔 {new_cases} new case(s) has been updated into View Alert!", icon="📊")
+        # Update the version to prevent showing again
+        st.session_state.limit_version = CURRENT_LIMIT
+
+    # --- Load Data for View Alert from fraud_cases table ---
+    @st.cache_data(ttl=60)
+    def load_alert_data(limit):
+        """Load fraud cases data for View Alert tab."""
+        try:
+            response = supabase.table("fraud_cases") \
+                .select("case_id, amount_formatted, risk_display, transaction_date, created_at") \
+                .limit(limit) \
+                .execute()
+            
+            if response.data:
+                df = pd.DataFrame(response.data)
+                # Sort by case_id numerically to show smaller IDs first
+                if 'case_id' in df.columns:
+                    df['case_id_num'] = df['case_id'].str.extract(r'(\d+)$').astype(int)
+                    df = df.sort_values('case_id_num').drop('case_id_num', axis=1)
+                return df
+            else:
+                return pd.DataFrame()
+        except Exception as e:
+            st.error(f"Error loading alert data: {e}")
+            return pd.DataFrame()
+    
+    def extract_risk_score(risk_display):
+        """Extract numeric risk score from risk display."""
+        try:
+            if pd.isna(risk_display):
+                return 0.5
+            
+            risk_str = str(risk_display)
+            
+            # Try to find percentage format (e.g., "90%")
+            if '%' in risk_str:
+                percentage_match = re.search(r'(\d+)%', risk_str)
+                if percentage_match:
+                    return int(percentage_match.group(1)) / 100
+            
+            # Try to find decimal in parentheses (e.g., "High (0.90)")
+            if '(' in risk_str and ')' in risk_str:
+                decimal_str = risk_str.split('(')[1].split(')')[0]
+                return float(decimal_str)
+            
+            return 0.5
+        except:
+            return 0.5
+    
+    def get_risk_level(risk_display):
+        """Get risk level category from risk display."""
+        try:
+            if pd.isna(risk_display):
+                return 'Unknown'
+            
+            risk_str = str(risk_display).lower()
+            
+            # First try to extract numeric score
+            risk_score = extract_risk_score(risk_display)
+            
+            # Determine risk level based on numeric score
+            if risk_score >= 0.70:
+                return 'High'
+            elif risk_score >= 0.40:
+                return 'Medium'
+            elif risk_score > 0:
+                return 'Low'
+            
+            # Fallback to text matching
+            if 'high' in risk_str:
+                return 'High'
+            elif 'medium' in risk_str:
+                return 'Medium'
+            elif 'low' in risk_str:
+                return 'Low'
+            else:
+                return 'Unknown'
+        except:
+            return 'Unknown'
 
     # --- Data Visualization ---
     fraud_trend = pd.DataFrame({
@@ -71,6 +170,23 @@ def render_reports():
         "SHAP Contribution": [0.24, 0.21, 0.18, 0.16, 0.15, 0.14],
     })
 
+    # --- Load alert data ---
+    alert_df = load_alert_data(limit=CURRENT_LIMIT)
+
+    # --- Get total count for info display ---
+    @st.cache_data(ttl=60)
+    def get_total_case_count():
+        """Get total number of cases in the database."""
+        try:
+            response = supabase.table("fraud_cases") \
+                .select("case_id", count="exact") \
+                .execute()
+            return response.count if hasattr(response, 'count') else 0
+        except Exception as e:
+            return 0
+    
+    total_cases_in_db = get_total_case_count()
+
     # --- Tabs ---
     st.markdown(
         """
@@ -91,12 +207,100 @@ def render_reports():
         unsafe_allow_html=True,
     )
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📈 Fraud Trends", "🗺️ Geography", "✅ Validation", "🎯 SHAP Summary", "🧠 NLP Keywords"
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "🚨 View Alert", "📈 Fraud Trends", "🗺️ Geography", "✅ Validation", "🎯 SHAP Summary", "🧠 NLP Keywords"
     ])
 
-    # ---- Tab 1 ----
+    # ---- Tab 1: View Alert ----
     with tab1:
+        st.subheader("🚨 Alert Queue")
+        st.caption(f"Fraud alerts requiring attention (showing first {CURRENT_LIMIT} cases)")
+        
+        # Show total cases info
+        if total_cases_in_db > CURRENT_LIMIT:
+            st.info(f"ℹ️ Showing first {CURRENT_LIMIT} cases. Total cases in database: {total_cases_in_db:,}. New cases beyond the first {CURRENT_LIMIT} will appear here as they move into the top {CURRENT_LIMIT}.")
+        
+        # Add a manual refresh button
+        col_refresh1, col_refresh2 = st.columns([1, 5])
+        with col_refresh1:
+            if st.button("🔄 Refresh Alerts", use_container_width=True, key="refresh_alerts_btn"):
+                st.cache_data.clear()
+                st.rerun()
+        
+        if not alert_df.empty:
+            # Process the data to create the required columns
+            alert_data = []
+            for _, row in alert_df.iterrows():
+                risk_score = extract_risk_score(row.get('risk_display', 'N/A'))
+                risk_level = get_risk_level(row.get('risk_display', 'N/A'))
+                fraud_score_percentage = f"{int(risk_score * 100)}%"
+                
+                alert_data.append({
+                    "transaction_id": row.get('case_id', 'N/A'),
+                    "amount": row.get('amount_formatted', 'N/A'),
+                    "fraud_score": fraud_score_percentage,
+                    "risk_level": risk_level,
+                    "timestamp": row.get('transaction_date', row.get('created_at', 'N/A')),
+                    "Key reasons": "N/A",
+                })
+            
+            df_alerts = pd.DataFrame(alert_data)
+            
+            # Calculate counts
+            total_alerts = len(alert_data)
+            high_risk_count = len([a for a in alert_data if a['risk_level'] == 'High'])
+            medium_risk_count = len([a for a in alert_data if a['risk_level'] == 'Medium'])
+            low_risk_count = len([a for a in alert_data if a['risk_level'] == 'Low'])
+            unknown_risk_count = len([a for a in alert_data if a['risk_level'] == 'Unknown'])
+            
+            # Alert Summary
+            st.markdown("### 📊 Alert Summary")
+            
+            # Display risk breakdown in columns
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("🔴 High Risk", high_risk_count, delta=f"{high_risk_count/total_alerts*100:.1f}%" if total_alerts > 0 else "0%")
+            with col2:
+                st.metric("🟠 Medium Risk", medium_risk_count, delta=f"{medium_risk_count/total_alerts*100:.1f}%" if total_alerts > 0 else "0%")
+            with col3:
+                st.metric("🟢 Low Risk", low_risk_count, delta=f"{low_risk_count/total_alerts*100:.1f}%" if total_alerts > 0 else "0%")
+            with col4:
+                st.metric("📊 Total Displayed", total_alerts)
+            
+            st.divider()
+            
+            # Display the table
+            st.dataframe(
+                df_alerts,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "transaction_id": st.column_config.TextColumn("Transaction ID", width="medium"),
+                    "amount": st.column_config.TextColumn("Amount", width="small"),
+                    "fraud_score": st.column_config.TextColumn("Fraud Score", width="small"),
+                    "risk_level": st.column_config.TextColumn("Risk Level", width="small"),
+                    "timestamp": st.column_config.DatetimeColumn("Timestamp", width="medium"),
+                    "Key reasons": st.column_config.TextColumn("Key Reasons", width="large"),
+                }
+            )
+            
+            # Export button for alerts
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                if st.button("📥 Export Alerts to CSV", use_container_width=True, key="export_alerts_btn"):
+                    csv = df_alerts.to_csv(index=False)
+                    st.download_button(
+                        label="Download CSV",
+                        data=csv,
+                        file_name=f"fraud_alerts_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        key="export_alerts_download"
+                    )
+        else:
+            st.info("📭 No alert data available at this time.")
+
+    # ---- Tab 2: Fraud Trends ----
+    with tab2:
         col1, _, col2 = st.columns([1, 0.05, 1])
         with col1:
             st.subheader("Fraud Detection Trends")
@@ -111,24 +315,26 @@ def render_reports():
                 legend=dict(orientation="h", yanchor="top", y=-0.3, xanchor="center", x=0.5, title=None),
                 margin=dict(b=60)
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="fraud_trend_chart")
         with col2:
             st.subheader("💰 Amount Saved (MYR)")
             st.plotly_chart(
                 px.area(fraud_trend, x="Month", y="Saved (MYR)", title="Total Amount Saved", color_discrete_sequence=["#22c55e"]),
                 use_container_width=True,
+                key="saved_amount_chart"
             )
 
-    # ---- Tab 2 ----
-    with tab2:
+    # ---- Tab 3: Geography ----
+    with tab3:
         st.subheader("Geographic Fraud Trends")
         st.plotly_chart(
             px.bar(geo_data, x="Region", y="Cases", color="Cases", title="Fraud Cases by Region", color_continuous_scale="Reds"),
-            use_container_width=True
+            use_container_width=True,
+            key="geo_chart"
         )
 
-    # ---- Tab 3 ----
-    with tab3:
+    # ---- Tab 4: Validation ----
+    with tab4:
         st.subheader("Validation Summary")
         col1, col2 = st.columns([1.2, 1])
         with col1:
@@ -140,7 +346,7 @@ def render_reports():
                              "Pending": "#a855f7",
                          })
             fig.update_layout(showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="validation_pie_chart")
         with col2:
             total_cases = validation_data["Cases"].sum()
             for _, row in validation_data.iterrows():
@@ -160,18 +366,19 @@ def render_reports():
                     unsafe_allow_html=True,
                 )
 
-    # ---- Tab 4 ----
-    with tab4:
+    # ---- Tab 5: SHAP Summary ----
+    with tab5:
         st.subheader("SHAP Feature Importance")
         st.plotly_chart(
             px.bar(shap_data, x="Feature", y="SHAP Value", color="SHAP Value",
                    color_continuous_scale=["#3b82f6", "#ef4444"],
                    title="Top Features Affecting Fraud Predictions"),
-            use_container_width=True
+            use_container_width=True,
+            key="shap_chart"
         )
 
-    # ---- Tab 5 ----
-    with tab5:
+    # ---- Tab 6: NLP Keywords ----
+    with tab6:
         st.subheader("NLP Keyword Analysis")
         st.dataframe(nlp_keywords, use_container_width=True)
         st.warning("🧠 These keywords often indicate potential fraud risk.")

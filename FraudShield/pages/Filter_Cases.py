@@ -127,6 +127,9 @@ def show():
     
     if 'form_version' not in st.session_state:
         st.session_state.form_version = 0
+    
+    if 'table_page' not in st.session_state:
+        st.session_state.table_page = 0  # 0-indexed page number for table pagination
 
     # --------------------------
     # LOAD DATA FROM SUPABASE (LIMITED TO 1000 ROWS)
@@ -240,6 +243,8 @@ def show():
         st.session_state.filtered_df = st.session_state.original_df.copy()
         # Increment form version to force widget reset
         st.session_state.form_version += 1
+        # Reset table page
+        st.session_state.table_page = 0
         # Clear the reset trigger
         st.session_state.reset_triggered = False
         # Force a rerun to refresh all inputs
@@ -332,6 +337,7 @@ def show():
         
         if apply_button:
             st.session_state.apply_filters = True
+            st.session_state.table_page = 0  # Reset to first page when applying new filters
             st.rerun()
         
         if reset_button:
@@ -406,11 +412,34 @@ def show():
             }
             table_df = table_df.rename(columns={k: v for k, v in column_names.items() if k in table_df.columns})
             
+            # Pagination settings
+            ROWS_PER_PAGE = 10
+            total_rows = len(table_df)
+            total_pages = (total_rows + ROWS_PER_PAGE - 1) // ROWS_PER_PAGE
+            
+            # Ensure page is within bounds
+            if total_pages > 0:
+                if st.session_state.table_page >= total_pages:
+                    st.session_state.table_page = total_pages - 1
+                if st.session_state.table_page < 0:
+                    st.session_state.table_page = 0
+            else:
+                st.session_state.table_page = 0
+            
+            # Get current page rows
+            start_idx = st.session_state.table_page * ROWS_PER_PAGE
+            end_idx = min(start_idx + ROWS_PER_PAGE, total_rows)
+            current_page_df = table_df.iloc[start_idx:end_idx]
+            
+            # Display page info
+            if total_pages > 0:
+                st.markdown(f"**Page {st.session_state.table_page + 1} of {total_pages}** (Showing {start_idx + 1}-{end_idx} of {total_rows} cases)")
+            
             # Display table with custom styling
             st.markdown("### Fraud Cases")
             
             # Create a container for the table
-            for idx, row in table_df.iterrows():
+            for idx, row in current_page_df.iterrows():
                 col1, col2, col3, col4, col5 = st.columns([2, 1.5, 1.5, 2, 1])
                 with col1:
                     st.write(row['Case ID'])
@@ -429,11 +458,56 @@ def show():
                     else:
                         st.write(risk_display)
                 with col5:
-                    if st.button(f"🔍 Inspect", key=f"inspect_table_{row['Case ID']}_{idx}", use_container_width=True):
+                    # Updated Inspect button with query parameter navigation
+                    if st.button(f"🔍 Inspect", key=f"inspect_table_{row['Case ID']}_{start_idx + idx}", use_container_width=True):
                         st.session_state.selected_case_id = row['Case ID']
-                        st.session_state.page = "🔍 Drill-Down Inspection"
+                        # Use query parameters to trigger navigation
+                        st.query_params["page"] = "Drill-Down Inspection"
+                        st.query_params["case_id"] = row['Case ID']
                         st.rerun()
                 st.divider()
+            
+            # Pagination controls
+            if total_pages > 1:
+                st.markdown("---")
+                
+                # Create 3 columns for pagination controls
+                col_prev, col_page_input, col_next = st.columns([1, 2, 1])
+                
+                # Previous button
+                with col_prev:
+                    if st.button("◀ Previous", use_container_width=True, disabled=(st.session_state.table_page == 0), key="table_prev"):
+                        st.session_state.table_page -= 1
+                        st.rerun()
+                
+                # Page number input box
+                with col_page_input:
+                    # Create a row with number input and go button
+                    input_col1, input_col2 = st.columns([3, 1])
+                    with input_col1:
+                        page_number = st.number_input(
+                            "Go to page",
+                            min_value=1,
+                            max_value=total_pages,
+                            value=st.session_state.table_page + 1,
+                            step=1,
+                            label_visibility="collapsed",
+                            key="table_page_number_input"
+                        )
+                    with input_col2:
+                        if st.button("Go", use_container_width=True, key="table_go_to_page"):
+                            if 1 <= page_number <= total_pages:
+                                st.session_state.table_page = page_number - 1
+                                st.rerun()
+                
+                # Next button
+                with col_next:
+                    if st.button("Next ▶", use_container_width=True, disabled=(st.session_state.table_page >= total_pages - 1), key="table_next"):
+                        st.session_state.table_page += 1
+                        st.rerun()
+                
+                # Show current page info
+                st.markdown(f"<div style='text-align: center; margin-top: 8px; font-size: 0.85rem; color: #666;'>Page {st.session_state.table_page + 1} of {total_pages}</div>", unsafe_allow_html=True)
         
         # Download button
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -464,4 +538,5 @@ def show():
             st.session_state.reset_triggered = True
             st.session_state.original_df = None
             st.session_state.filtered_df = None
+            st.session_state.table_page = 0
             st.rerun()
