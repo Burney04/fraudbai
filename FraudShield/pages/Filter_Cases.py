@@ -94,18 +94,18 @@ def show():
         """Get risk level category from risk display."""
         try:
             if pd.isna(risk_display):
-                return 'Unknown'
+                return 'High'
             risk_str = str(risk_display).lower()
-            if 'high' in risk_str:
+            if 'critical' in risk_str or 'high' in risk_str:
                 return 'High'
             elif 'medium' in risk_str:
                 return 'Medium'
             elif 'low' in risk_str:
                 return 'Low'
             else:
-                return 'Unknown'
+                return 'High'
         except:
-            return 'Unknown'
+            return 'High'
 
     # --------------------------
     # INITIALIZE SESSION STATE
@@ -129,7 +129,11 @@ def show():
         st.session_state.form_version = 0
     
     if 'table_page' not in st.session_state:
-        st.session_state.table_page = 0  # 0-indexed page number for table pagination
+        st.session_state.table_page = 0
+    
+    # Add filter values to session state for immediate updates
+    if 'date_filter_value' not in st.session_state:
+        st.session_state.date_filter_value = "All"
 
     # --------------------------
     # LOAD DATA FROM SUPABASE (LIMITED TO 1000 ROWS)
@@ -138,7 +142,6 @@ def show():
     def load_fraud_cases():
         """Load first 1000 fraud cases from Supabase."""
         try:
-            # Load only first 1000 records
             response = supabase.table("fraud_cases") \
                 .select("*") \
                 .limit(1000) \
@@ -148,13 +151,11 @@ def show():
                 df = pd.DataFrame(response.data)
                 total_loaded = len(df)
                 
-                # Process the data
                 if 'transaction_date' in df.columns:
                     df['transaction_date'] = pd.to_datetime(df['transaction_date'])
                     df['date'] = df['transaction_date'].dt.date
                     df['date_str'] = df['transaction_date'].dt.strftime('%Y-%m-%d')
                 
-                # Extract numeric values for filtering and calculations
                 df['risk_score_numeric'] = df['risk_display'].apply(extract_risk_score)
                 df['amount_numeric'] = df['amount_formatted'].apply(extract_amount)
                 df['risk_level'] = df['risk_display'].apply(get_risk_level)
@@ -168,8 +169,6 @@ def show():
             return get_sample_data(), 0, error_msg
     
     def get_sample_data():
-        """Return sample data if Supabase is unavailable."""
-        # Create sample data (limited to 1000 for sample)
         np.random.seed(42)
         n_samples = 1000
         
@@ -177,12 +176,10 @@ def show():
             'case_id': [f'FR-2025-{i:04d}' for i in range(1000, 1000+n_samples)],
             'transaction_date': pd.date_range(start='2023-01-01', periods=n_samples, freq='h')[:n_samples],
             'amount_formatted': [f"RM {np.random.uniform(10, 50000):,.2f}" for _ in range(n_samples)],
-            'risk_display': np.random.choice(['Low (0.15)', 'Medium (0.45)', 'High (0.85)'], n_samples, p=[0.3, 0.4, 0.3]),
+            'risk_display': np.random.choice(['Low (0.15)', 'Medium (0.45)', 'High (0.85)', 'Critical (0.95)'], n_samples, p=[0.25, 0.35, 0.3, 0.1]),
         }
         
         df = pd.DataFrame(sample_data)
-        
-        # Process the data
         df['transaction_date'] = pd.to_datetime(df['transaction_date'])
         df['date'] = df['transaction_date'].dt.date
         df['date_str'] = df['transaction_date'].dt.strftime('%Y-%m-%d')
@@ -198,12 +195,10 @@ def show():
     with st.spinner("Loading fraud case data from database (first 1000 records)..."):
         df, total_loaded, error = load_fraud_cases()
     
-    # Store original dataframe
     if st.session_state.original_df is None:
         st.session_state.original_df = df.copy()
         st.session_state.filtered_df = df.copy()
     
-    # Show results/errors after loading
     if error:
         if "No data found" in error:
             st.warning("No data found in the database. Using sample data.")
@@ -218,15 +213,13 @@ def show():
     # --------------------------
     # GET UNIQUE VALUES FOR FILTERS
     # --------------------------
-    risk_levels = ["All", "High", "Medium", "Low", "Unknown"]
+    risk_levels = ["All", "High", "Medium", "Low"]
     
-    # Get unique dates
     if 'date_str' in df.columns:
         unique_dates = ["All"] + sorted(df['date_str'].dropna().unique().tolist(), reverse=True)
     else:
         unique_dates = ["All"]
     
-    # Get min and max amounts
     if 'amount_numeric' in df.columns:
         global_min_amount = float(df['amount_numeric'].min())
         global_max_amount = float(df['amount_numeric'].max())
@@ -238,42 +231,41 @@ def show():
     # CHECK IF RESET IS TRIGGERED
     # --------------------------
     if st.session_state.reset_triggered:
-        # Clear all filter-related session state
         st.session_state.apply_filters = False
         st.session_state.filtered_df = st.session_state.original_df.copy()
-        # Increment form version to force widget reset
         st.session_state.form_version += 1
-        # Reset table page
         st.session_state.table_page = 0
-        # Clear the reset trigger
+        st.session_state.date_filter_value = "All"
         st.session_state.reset_triggered = False
-        # Force a rerun to refresh all inputs
         st.rerun()
 
     # --------------------------
-    # FILTERS SECTION
+    # WRAP EVERYTHING IN A CONTAINER
     # --------------------------
-    st.markdown("### 📊 Filter Cases")
-    
-    # Create unique keys based on form_version to force reset
-    version = st.session_state.form_version
-    
-    # Create filter containers to store values
-    with st.form("filter_form"):
-        # First row of filters
+    with st.container():
+        st.markdown("### 📊 Filter Cases")
+        
+        version = st.session_state.form_version
+        
+        # First row of filters - Case ID
         col1, col2 = st.columns(2)
         with col1:
+            st.markdown("**Case ID**")
             case_id_search = st.text_input(
                 "Case ID",
                 placeholder="Search by Case ID (e.g., FR-2025-0842)",
                 help="Enter full or partial case ID",
+                label_visibility="collapsed",
                 key=f"filter_case_id_{version}"
             )
         
+        # First row - Risk Level
         with col2:
+            st.markdown("**Risk Level**")
             risk_filter = st.selectbox(
                 "Risk Level",
                 risk_levels,
+                label_visibility="collapsed",
                 key=f"filter_risk_{version}"
             )
         
@@ -293,6 +285,11 @@ def show():
                     unique_dates, 
                     key=f"date_select_{version}"
                 )
+                # Update session state for immediate filter application
+                if date_filter != st.session_state.date_filter_value:
+                    st.session_state.date_filter_value = date_filter
+                    st.session_state.apply_filters = True
+                    st.rerun()
             else:
                 manual_date = st.text_input(
                     "Enter Date (YYYY-MM-DD)",
@@ -301,6 +298,10 @@ def show():
                     key=f"date_manual_{version}"
                 )
                 date_filter = manual_date if manual_date else "All"
+                if date_filter != st.session_state.date_filter_value:
+                    st.session_state.date_filter_value = date_filter
+                    st.session_state.apply_filters = True
+                    st.rerun()
         
         with col4:
             st.markdown("**Amount Range (RM)**")
@@ -328,30 +329,26 @@ def show():
             
             amount_range = (min_amount_input, max_amount_input)
         
-        # Buttons row
+        # Apply and Reset buttons
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
-            apply_button = st.form_submit_button("🔍 Apply Filters", type="primary", use_container_width=True)
+            if st.button("🔍 Apply Filters", type="primary", use_container_width=True):
+                st.session_state.apply_filters = True
+                st.session_state.table_page = 0
+                st.rerun()
+        
         with col_btn2:
-            reset_button = st.form_submit_button("🔄 Reset All Filters", use_container_width=True)
-        
-        if apply_button:
-            st.session_state.apply_filters = True
-            st.session_state.table_page = 0  # Reset to first page when applying new filters
-            st.rerun()
-        
-        if reset_button:
-            # Set reset trigger
-            st.session_state.reset_triggered = True
-            st.rerun()
+            if st.button("🔄 Reset All Filters", use_container_width=True):
+                st.session_state.reset_triggered = True
+                st.rerun()
 
     # --------------------------
-    # FILTERING LOGIC (Only applied when Apply button is clicked)
+    # FILTERING LOGIC
     # --------------------------
     if st.session_state.apply_filters and not st.session_state.reset_triggered:
         filtered_df = st.session_state.original_df.copy()
         
-        # Apply all filters
+        # Apply text filters
         if case_id_search:
             filtered_df = filtered_df[
                 filtered_df['case_id'].str.contains(
@@ -364,8 +361,10 @@ def show():
         if risk_filter != "All":
             filtered_df = filtered_df[filtered_df['risk_level'] == risk_filter]
         
-        if date_filter != "All" and date_filter and 'date_str' in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df['date_str'] == date_filter]
+        # Apply date filter using session state value
+        date_filter_value = st.session_state.date_filter_value
+        if date_filter_value != "All" and date_filter_value and 'date_str' in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df['date_str'] == date_filter_value]
         
         if 'amount_numeric' in filtered_df.columns:
             filtered_df = filtered_df[
@@ -373,7 +372,6 @@ def show():
                 (filtered_df['amount_numeric'] <= amount_range[1])
             ]
         
-        # Store filtered results in session state
         st.session_state.filtered_df = filtered_df
 
     # Display filter summary
@@ -397,13 +395,11 @@ def show():
         )
         
         if show_options == "Table View":
-            # Select columns for table view
             table_columns = ['case_id', 'date_str', 'amount_formatted', 'risk_display']
             available_columns = [col for col in table_columns if col in st.session_state.filtered_df.columns]
             
             table_df = st.session_state.filtered_df[available_columns].copy()
             
-            # Rename columns for display
             column_names = {
                 'case_id': 'Case ID',
                 'date_str': 'Date',
@@ -412,12 +408,10 @@ def show():
             }
             table_df = table_df.rename(columns={k: v for k, v in column_names.items() if k in table_df.columns})
             
-            # Pagination settings
             ROWS_PER_PAGE = 10
             total_rows = len(table_df)
             total_pages = (total_rows + ROWS_PER_PAGE - 1) // ROWS_PER_PAGE
             
-            # Ensure page is within bounds
             if total_pages > 0:
                 if st.session_state.table_page >= total_pages:
                     st.session_state.table_page = total_pages - 1
@@ -426,19 +420,15 @@ def show():
             else:
                 st.session_state.table_page = 0
             
-            # Get current page rows
             start_idx = st.session_state.table_page * ROWS_PER_PAGE
             end_idx = min(start_idx + ROWS_PER_PAGE, total_rows)
             current_page_df = table_df.iloc[start_idx:end_idx]
             
-            # Display page info
             if total_pages > 0:
                 st.markdown(f"**Page {st.session_state.table_page + 1} of {total_pages}** (Showing {start_idx + 1}-{end_idx} of {total_rows} cases)")
             
-            # Display table with custom styling
             st.markdown("### Fraud Cases")
             
-            # Create a container for the table
             for idx, row in current_page_df.iterrows():
                 col1, col2, col3, col4, col5 = st.columns([2, 1.5, 1.5, 2, 1])
                 with col1:
@@ -449,7 +439,7 @@ def show():
                     st.write(row['Amount'])
                 with col4:
                     risk_display = row['Risk Score']
-                    if 'High' in risk_display:
+                    if 'High' in risk_display or 'Critical' in risk_display:
                         st.markdown(f'<span class="badge high">{risk_display}</span>', unsafe_allow_html=True)
                     elif 'Medium' in risk_display:
                         st.markdown(f'<span class="badge medium">{risk_display}</span>', unsafe_allow_html=True)
@@ -458,31 +448,24 @@ def show():
                     else:
                         st.write(risk_display)
                 with col5:
-                    # Updated Inspect button with query parameter navigation
                     if st.button(f"🔍 Inspect", key=f"inspect_table_{row['Case ID']}_{start_idx + idx}", use_container_width=True):
                         st.session_state.selected_case_id = row['Case ID']
-                        # Use query parameters to trigger navigation
                         st.query_params["page"] = "Drill-Down Inspection"
                         st.query_params["case_id"] = row['Case ID']
                         st.rerun()
                 st.divider()
             
-            # Pagination controls
             if total_pages > 1:
                 st.markdown("---")
                 
-                # Create 3 columns for pagination controls
                 col_prev, col_page_input, col_next = st.columns([1, 2, 1])
                 
-                # Previous button
                 with col_prev:
                     if st.button("◀ Previous", use_container_width=True, disabled=(st.session_state.table_page == 0), key="table_prev"):
                         st.session_state.table_page -= 1
                         st.rerun()
                 
-                # Page number input box
                 with col_page_input:
-                    # Create a row with number input and go button
                     input_col1, input_col2 = st.columns([3, 1])
                     with input_col1:
                         page_number = st.number_input(
@@ -500,16 +483,13 @@ def show():
                                 st.session_state.table_page = page_number - 1
                                 st.rerun()
                 
-                # Next button
                 with col_next:
                     if st.button("Next ▶", use_container_width=True, disabled=(st.session_state.table_page >= total_pages - 1), key="table_next"):
                         st.session_state.table_page += 1
                         st.rerun()
                 
-                # Show current page info
                 st.markdown(f"<div style='text-align: center; margin-top: 8px; font-size: 0.85rem; color: #666;'>Page {st.session_state.table_page + 1} of {total_pages}</div>", unsafe_allow_html=True)
         
-        # Download button
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             st.download_button(

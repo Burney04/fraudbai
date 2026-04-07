@@ -2,131 +2,254 @@ import streamlit as st
 import pandas as pd
 from FraudShield.utils.supabase_client import supabase
 from datetime import datetime
+import re
 
 def show():
-    # --- Load Data from Supabase (Load all cases without ordering to show older data) ---
-    @st.cache_data(ttl=60)  # Cache for 60 seconds
+    # --- Optimized: Reduced data loading and better caching ---
+    @st.cache_data(ttl=300, show_spinner=False)
     def load_fraud_cases():
-        """Load fraud cases from Supabase (no date ordering to show older cases)."""
+        """Load fraud cases - only essential columns."""
         try:
-            # Remove ORDER BY to see all cases including older ones like FR-2025-4000
             response = supabase.table("fraud_cases") \
-                .select("*") \
+                .select("case_id, amount_formatted, risk_display, transaction_date, sentiment, fraud_terms, complaint_link, customer_history, actual_fraud") \
                 .limit(1000) \
                 .execute()
             
-            if response.data:
-                df = pd.DataFrame(response.data)
-                # Ensure case_id is properly formatted as string
-                if 'case_id' in df.columns:
-                    df['case_id'] = df['case_id'].astype(str)
-                
-                # Sort by case_id numerically to show smaller IDs first
-                # Extract numeric part from case_id (e.g., "FR-2025-4000" -> 4000)
-                df['case_id_num'] = df['case_id'].str.extract(r'(\d+)$').astype(int)
-                df = df.sort_values('case_id_num').drop('case_id_num', axis=1)
-                
-                return df.to_dict('records')
-            else:
+            if not response.data:
                 return []
+            
+            df = pd.DataFrame(response.data)
+            if 'case_id' in df.columns:
+                df['case_id'] = df['case_id'].astype(str)
+            
+            df['case_id_num'] = df['case_id'].str.extract(r'(\d+)$').astype(int)
+            df = df.sort_values('case_id_num').drop('case_id_num', axis=1)
+            
+            return df.to_dict('records')
         except Exception as e:
             st.error(f"Error loading fraud cases: {e}")
             return []
 
-    # Initialize session state
-    def init_state():
-        """Initialize Streamlit session state variables."""
-        if "cases" not in st.session_state:
-            st.session_state.cases = load_fraud_cases()
-        if "selected_case_id" not in st.session_state:
-            st.session_state.selected_case_id = None
-        if "notes" not in st.session_state:
-            st.session_state.notes = ""
-        if "pending_page" not in st.session_state:
-            st.session_state.pending_page = 0  # 0-indexed page number
+    @st.cache_data(ttl=300, show_spinner=False)
+    def load_validated_cases():
+        """Load validated cases - limited and optimized."""
+        try:
+            response = supabase.table("validated_cases") \
+                .select("case_id, amount, risk_score, sentiment, fraud_terms, complaint_link, customer_history, validated, valid_type, feedback_notes, timestamp, updated_at") \
+                .execute()
+            
+            return response.data if response.data else []
+        except Exception as e:
+            st.error(f"Error loading validated cases: {e}")
+            return []
 
-    # --- Helper Functions ---
+    # --- Optimized: Pre-compile regex pattern ---
+    RISK_PERCENTAGE_PATTERN = re.compile(r'(\d+)%')
+    RISK_DECIMAL_PATTERN = re.compile(r'\((\d+\.?\d*)\)')
+    
+    @st.cache_data(ttl=3600)
     def extract_risk_score(risk_display):
-        """Extract numeric risk score from risk display."""
+        """Extract numeric risk score - cached for performance."""
         try:
             if not risk_display:
                 return 0.5
             
             risk_str = str(risk_display)
             
-            # Try to find percentage format (e.g., "90%")
-            if '%' in risk_str:
-                import re
-                percentage_match = re.search(r'(\d+)%', risk_str)
-                if percentage_match:
-                    return int(percentage_match.group(1)) / 100
+            percentage_match = RISK_PERCENTAGE_PATTERN.search(risk_str)
+            if percentage_match:
+                return int(percentage_match.group(1)) / 100
             
-            # Try to find decimal in parentheses (e.g., "High (0.90)")
-            if '(' in risk_str and ')' in risk_str:
-                decimal_str = risk_str.split('(')[1].split(')')[0]
-                return float(decimal_str)
+            decimal_match = RISK_DECIMAL_PATTERN.search(risk_str)
+            if decimal_match:
+                return float(decimal_match.group(1))
             
             return 0.5
         except:
             return 0.5
 
-    def handle_validate(case_id, decision):
-        """Update case validation status."""
-        # Update local session state
-        for case_ in st.session_state.cases:
-            if case_["case_id"] == case_id:
-                case_["actual_fraud"] = decision
-                
-                # Update in Supabase
-                try:
-                    supabase.table("fraud_cases") \
-                        .update({"actual_fraud": decision}) \
-                        .eq("case_id", case_id) \
-                        .execute()
-                except Exception as e:
-                    st.error(f"Error updating database: {e}")
+    # --- Update validated case ---
+    def update_validated_case(case_id, valid_type, feedback_notes, user_email):
+        """Update an existing validated case."""
+        try:
+            update_data = {
+                "valid_type": valid_type,
+                "validated": user_email,
+                "feedback_notes": feedback_notes,
+                "updated_at": datetime.now().isoformat()
+            }
+            
+            supabase.table("validated_cases") \
+                .update(update_data) \
+                .eq("case_id", case_id) \
+                .execute()
+            
+            return True, f"Case {case_id} updated successfully"
+        except Exception as e:
+            return False, f"Error updating case: {e}"
 
-        case_item = next((c for c in st.session_state.cases if c["case_id"] == case_id), None)
+    # --- Optimized: Batch validation check ---
+    def get_validated_case_ids():
+        """Get set of validated case IDs in one query."""
+        try:
+            response = supabase.table("validated_cases") \
+                .select("case_id") \
+                .execute()
+            return {item['case_id'] for item in response.data} if response.data else set()
+        except:
+            return set()
+
+    # --- Optimized: Batch insert for auto-validation ---
+    def auto_validate_high_risk_cases(cases, user_email):
+        """Auto-validate high-risk cases - optimized batch check."""
+        validated_ids = get_validated_case_ids()
         
-        # Get appropriate message based on decision
-        if decision == "confirmed":
-            messages = f"✅ Case {case_id} confirmed as fraud."
-            icon = "✅"
-        elif decision == "rejected":
-            messages = f"🟢 Case {case_id} marked as legitimate."
-            icon = "🟢"
-        else:  # escalated
-            messages = f"🟣 Case {case_id} escalated."
-            icon = "🟣"
+        validated_count = 0
+        for case in cases:
+            risk_score = extract_risk_score(case.get('risk_display', 'N/A'))
+            case_id = case.get('case_id')
+            
+            if risk_score > 0.90 and case_id not in validated_ids:
+                try:
+                    risk_percentage = f"{int(risk_score * 100)}%"
+                    insert_data = {
+                        "case_id": case_id,
+                        "amount": case.get('amount_formatted'),
+                        "risk_score": risk_percentage,
+                        "sentiment": case.get('sentiment'),
+                        "fraud_terms": case.get('fraud_terms'),
+                        "complaint_link": case.get('complaint_link'),
+                        "customer_history": case.get('customer_history'),
+                        "model_prediction": "N/A",
+                        "validated": "Auto-Confirmed",
+                        "valid_type": "Confirmed Fraud",
+                        "shap": "N/A",
+                        "key_reason": "N/A",
+                        "feedback_notes": "Auto-validated due to high risk score (>90%)",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    supabase.table("validated_cases").insert(insert_data).execute()
+                    validated_count += 1
+                except Exception:
+                    pass
+        
+        if validated_count > 0:
+            st.toast(f"🤖 Auto-validated {validated_count} high-risk case(s)", icon="🤖")
+            st.cache_data.clear()
+            st.rerun()
 
-        if case_item:
-            st.toast(messages, icon=icon)
+    # --- Optimized: Single database update ---
+    def insert_validated_case(case_data, user_email, valid_type, feedback_notes):
+        """Insert validated case - optimized."""
+        try:
+            risk_score = extract_risk_score(case_data.get('risk_display', 'N/A'))
+            risk_percentage = f"{int(risk_score * 100)}%"
+            
+            insert_data = {
+                "case_id": case_data.get('case_id'),
+                "amount": case_data.get('amount_formatted'),
+                "risk_score": risk_percentage,
+                "sentiment": case_data.get('sentiment'),
+                "fraud_terms": case_data.get('fraud_terms'),
+                "complaint_link": case_data.get('complaint_link'),
+                "customer_history": case_data.get('customer_history'),
+                "model_prediction": "N/A",
+                "validated": user_email if user_email else "Auto-Confirmed",
+                "valid_type": valid_type,
+                "shap": "N/A",
+                "key_reason": "N/A",
+                "feedback_notes": feedback_notes,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            supabase.table("validated_cases").insert(insert_data).execute()
+            return True, f"Case {case_data.get('case_id')} added"
+        except Exception as e:
+            return False, f"Error: {e}"
 
-        # Reset form state
+    # Initialize session state
+    def init_state():
+        """Initialize session state with minimal variables."""
+        defaults = {
+            "cases": load_fraud_cases(),
+            "validated_cases": load_validated_cases(),
+            "selected_case_id": None,
+            "notes": "",
+            "pending_page": 0,
+            "confirm_update": None
+        }
+        for key, value in defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = value
+
+    # --- Main handlers ---
+    def handle_validate(case_id, decision, valid_type, feedback_notes):
+        """Handle case validation."""
+        try:
+            supabase.table("fraud_cases") \
+                .update({"actual_fraud": decision}) \
+                .eq("case_id", case_id) \
+                .execute()
+        except Exception as e:
+            st.error(f"Error updating database: {e}")
+            return
+        
+        selected_case = next((c for c in st.session_state.cases if c["case_id"] == case_id), None)
+        if selected_case:
+            user_email = st.session_state.user.email if hasattr(st.session_state, 'user') else "Unknown"
+            success, message = insert_validated_case(selected_case, user_email, valid_type, feedback_notes)
+            
+            if success:
+                st.cache_data.clear()
+                st.session_state.validated_cases = load_validated_cases()
+                st.toast(f"✅ Case {case_id} {decision}", icon="✅")
+            else:
+                st.error(message)
+        
         st.session_state.notes = ""
         st.session_state.selected_case_id = None
-
-    def refresh_data():
-        """Manually refresh data from Supabase."""
-        # Clear cache and reload
-        st.cache_data.clear()
-        st.session_state.cases = load_fraud_cases()
-        st.session_state.pending_page = 0  # Reset to first page
         st.rerun()
 
-    # --- Page Render Function ---
+    def handle_revalidation(case_id, valid_type, feedback_notes):
+        """Handle revalidation of an existing case."""
+        user_email = st.session_state.user.email if hasattr(st.session_state, 'user') else "Unknown"
+        success, message = update_validated_case(case_id, valid_type, feedback_notes, user_email)
+        
+        if success:
+            st.cache_data.clear()
+            st.session_state.validated_cases = load_validated_cases()
+            st.toast(f"✅ Case {case_id} revalidated successfully", icon="✅")
+            st.session_state.confirm_update = None
+            st.rerun()
+        else:
+            st.error(message)
+
+    def refresh_data():
+        """Refresh all data."""
+        st.cache_data.clear()
+        st.session_state.cases = load_fraud_cases()
+        st.session_state.validated_cases = load_validated_cases()
+        st.session_state.pending_page = 0
+        st.session_state.selected_case_id = None
+        st.rerun()
+
+    # --- Render function ---
     def render():
-        """Main UI for Validation Queue Page."""
+        """Main UI - optimized rendering."""
         init_state()
 
         cases = st.session_state.cases
+        validated_cases_list = st.session_state.validated_cases
         selected_case_id = st.session_state.selected_case_id
         notes = st.session_state.notes
+        
+        user_email = st.session_state.user.email if hasattr(st.session_state, 'user') else "Unknown"
+        
+        # Auto-validate on load
+        auto_validate_high_risk_cases(cases, user_email)
 
         # --- Header ---
         st.title("🧾 Fraud Case Validation")
-        
-        # Display info about data limit
         st.caption(f"📊 Showing {len(cases)} cases from database (ordered by Case ID ascending)")
         
         # Refresh button
@@ -140,349 +263,293 @@ def show():
         # --- Validation Summary Section ---
         st.subheader("📊 Validation Summary")
         
-        # Calculate statistics
-        total_cases = len(cases)
+        validated_case_ids = [v['case_id'] for v in validated_cases_list]
         
-        # Segregate cases based on risk score threshold for display purposes
         confirmed_cases = []
         pending_ambiguous_cases = []
         
         for case in cases:
             risk_score = extract_risk_score(case.get('risk_display', 'N/A'))
+            is_validated = case['case_id'] in validated_case_ids
             
-            # Check if case is confirmed (has actual_fraud value OR risk score > 90%)
-            is_confirmed = (case.get('actual_fraud') in ['confirmed', 'rejected', 'escalated']) or (risk_score > 0.90)
-            
-            if is_confirmed:
+            if is_validated or risk_score > 0.90:
                 confirmed_cases.append(case)
             else:
                 pending_ambiguous_cases.append(case)
         
-        # Count validation statuses (from actual_fraud field)
-        manually_confirmed_count = sum(1 for c in cases if c.get('actual_fraud') == 'confirmed')
-        legitimate_count = sum(1 for c in cases if c.get('actual_fraud') == 'rejected')
-        escalated_count = sum(1 for c in cases if c.get('actual_fraud') == 'escalated')
+        confirmed_count = len([v for v in validated_cases_list if v.get('valid_type') == 'Confirmed Fraud'])
+        legitimate_count = len([v for v in validated_cases_list if v.get('valid_type') == 'Legitimate'])
+        escalated_count = len([v for v in validated_cases_list if v.get('valid_type') == 'Escalated'])
         
-        # Display metrics in 4 columns
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("⏳ Pending Validation", len(pending_ambiguous_cases))
         with col2:
-            st.metric("✅ Confirmed Cases", len(confirmed_cases))
+            st.metric("✅ Confirmed Fraud", confirmed_count)
         with col3:
-            st.metric("🟢 Legitimate (Rejected)", legitimate_count)
+            st.metric("🟢 Legitimate", legitimate_count)
         with col4:
             st.metric("🟣 Escalated", escalated_count)
         
         st.divider()
         
-        # --- Tabs for Cases ---
-        tab1, tab2 = st.tabs(["⚠️ Pending Cases", "✅ Validated Cases"])
+        # --- Tabs (Now with 3 tabs) ---
+        tab1, tab2, tab3 = st.tabs(["⚠️ Pending Cases", "✅ Validated Cases", "🔄 Re-validate Cases"])
         
         # --- Tab 1: Pending Cases ---
         with tab1:
-            st.caption(f"Cases that need manual validation (Total: {len(pending_ambiguous_cases)} cases)")
+            validated_ids = set(validated_case_ids)
+            pending_cases = [c for c in cases if c['case_id'] not in validated_ids and extract_risk_score(c.get('risk_display', 'N/A')) <= 0.90]
+            st.caption(f"Cases needing validation: {len(pending_cases)}")
             
-            if pending_ambiguous_cases:
-                # Pagination settings - changed from 10 to 7
-                CARDS_PER_PAGE = 7
-                total_pages = (len(pending_ambiguous_cases) + CARDS_PER_PAGE - 1) // CARDS_PER_PAGE
+            if pending_cases:
+                CARDS_PER_PAGE = 10
+                total_pages = max(1, (len(pending_cases) + CARDS_PER_PAGE - 1) // CARDS_PER_PAGE)
                 
-                # Ensure page is within bounds
                 if st.session_state.pending_page >= total_pages:
                     st.session_state.pending_page = total_pages - 1
-                if st.session_state.pending_page < 0:
-                    st.session_state.pending_page = 0
                 
-                # Get current page cases
                 start_idx = st.session_state.pending_page * CARDS_PER_PAGE
-                end_idx = min(start_idx + CARDS_PER_PAGE, len(pending_ambiguous_cases))
-                current_cases = pending_ambiguous_cases[start_idx:end_idx]
+                current_cases = pending_cases[start_idx:start_idx + CARDS_PER_PAGE]
                 
-                # Layout: Queue (Left) + Validation Panel (Right)
                 col_left, col_right = st.columns([2, 1])
                 
-                # --- Left Column: Pending Cases Cards (Paginated) ---
                 with col_left:
-                    # Display page info
-                    st.markdown(f"**Page {st.session_state.pending_page + 1} of {total_pages}** (Showing {start_idx + 1}-{end_idx} of {len(pending_ambiguous_cases)} cases)")
+                    st.markdown(f"**Page {st.session_state.pending_page + 1} / {total_pages}**")
                     
-                    # Display cards for current page
-                    for idx, case_ in enumerate(current_cases):
-                        risk_score = extract_risk_score(case_.get('risk_display', 'N/A'))
-                        risk_percentage = int(risk_score * 100)
+                    for idx, case in enumerate(current_cases):
+                        risk_score = extract_risk_score(case.get('risk_display', 'N/A'))
+                        risk_pct = int(risk_score * 100)
                         
-                        # Determine risk badge color based on risk score
-                        if risk_percentage >= 80:
-                            badge_color = "#DC2626"  # Red for high risk
+                        if risk_pct >= 80:
+                            badge_color = "#DC2626"
                             badge_bg = "#FEE2E2"
-                            risk_badge = "🔴 High Risk"
-                        elif risk_percentage >= 60:
-                            badge_color = "#D97706"  # Orange for medium risk
+                        elif risk_pct >= 60:
+                            badge_color = "#D97706"
                             badge_bg = "#FEF3C7"
-                            risk_badge = "🟠 Medium Risk"
                         else:
-                            badge_color = "#059669"  # Green for low risk
+                            badge_color = "#059669"
                             badge_bg = "#D1FAE5"
-                            risk_badge = "🟢 Low Risk"
                         
-                        # Highlight selected card border
-                        if selected_case_id == case_["case_id"]:
-                            border_color = "#3B82F6"
-                            border_width = "2px"
-                            selected_badge = " ✓ SELECTED"
-                        else:
-                            border_color = "#E5E7EB"
-                            border_width = "1px"
-                            selected_badge = ""
+                        border_style = "2px solid #3B82F6" if selected_case_id == case["case_id"] else "1px solid #E5E7EB"
+                        bg_color = "#EFF6FF" if selected_case_id == case["case_id"] else "#FFFFFF"
                         
-                        # Create a container for each card
-                        with st.container():
-                            st.markdown(
-                                f"""
-                                <div style='
-                                    background: #FFFFFF;
-                                    border: {border_width} solid {border_color};
-                                    border-radius: 12px;
-                                    padding: 16px;
-                                    margin-bottom: 12px;
-                                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-                                    transition: all 0.2s ease;
-                                '>
-                                    <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;'>
-                                        <div>
-                                            <span style='font-size: 1rem; font-weight: 700; color: #1F2937;'>
-                                                📌 {case_['case_id']}{selected_badge}
-                                            </span>
-                                        </div>
-                                        <div>
-                                            <span style='
-                                                background: {badge_bg};
-                                                color: {badge_color};
-                                                padding: 4px 12px;
-                                                border-radius: 20px;
-                                                font-size: 0.75rem;
-                                                font-weight: 600;
-                                            '>
-                                                {risk_badge}
-                                            </span>
-                                        </div>
-                                    </div>
-                                    <div style='margin-top: 8px; display: flex; gap: 15px; flex-wrap: wrap;'>
-                                        <span style='color: #6B7280; font-size: 0.85rem;'>
-                                            💰 <strong>{case_.get('amount_formatted', 'N/A')}</strong>
-                                        </span>
-                                        <span style='color: #6B7280; font-size: 0.85rem;'>
-                                            📊 <strong>{risk_percentage}%</strong> Risk Score
-                                        </span>
-                                    </div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True,
-                            )
-                            
-                            # Selection button
-                            if st.button(
-                                f"Select {case_['case_id']}",
-                                key=f"select_btn_{case_['case_id']}_{start_idx + idx}",
-                                use_container_width=True,
-                                type="secondary" if selected_case_id != case_["case_id"] else "primary"
-                            ):
-                                st.session_state.selected_case_id = case_["case_id"]
-                                st.rerun()
+                        st.markdown(f"""
+                        <div style='border:{border_style}; border-radius:12px; padding:12px; margin-bottom:10px; background:{bg_color};'>
+                            <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
+                                <strong>📌 {case['case_id']}</strong>
+                                <span style='background:{badge_bg}; color:{badge_color}; padding:2px 8px; border-radius:12px; font-size:12px;'>
+                                    {risk_pct}% Risk
+                                </span>
+                            </div>
+                            <div>💰 {case.get('amount_formatted', 'N/A')}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        if st.button(f"Select", key=f"select_{case['case_id']}_{idx}", use_container_width=True):
+                            st.session_state.selected_case_id = case["case_id"]
+                            st.rerun()
                     
-                    # Pagination controls with page number input
                     if total_pages > 1:
-                        st.markdown("---")
-                        
-                        # Create 3 columns for pagination controls
-                        col_prev, col_page_input, col_next = st.columns([1, 2, 1])
-                        
-                        # Previous button
-                        with col_prev:
-                            if st.button("◀ Previous", use_container_width=True, disabled=(st.session_state.pending_page == 0)):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("◀ Previous", disabled=(st.session_state.pending_page == 0), use_container_width=True):
                                 st.session_state.pending_page -= 1
                                 st.rerun()
-                        
-                        # Page number input box
-                        with col_page_input:
-                            # Create a row with number input and go button
-                            input_col1, input_col2 = st.columns([3, 1])
-                            with input_col1:
-                                page_number = st.number_input(
-                                    "Go to page",
-                                    min_value=1,
-                                    max_value=total_pages,
-                                    value=st.session_state.pending_page + 1,
-                                    step=1,
-                                    label_visibility="collapsed",
-                                    key="page_number_input"
-                                )
-                            with input_col2:
-                                if st.button("Go", use_container_width=True, key="go_to_page"):
-                                    if 1 <= page_number <= total_pages:
-                                        st.session_state.pending_page = page_number - 1
-                                        st.rerun()
-                        
-                        # Next button
-                        with col_next:
-                            if st.button("Next ▶", use_container_width=True, disabled=(st.session_state.pending_page >= total_pages - 1)):
+                        with col2:
+                            if st.button("Next ▶", disabled=(st.session_state.pending_page >= total_pages - 1), use_container_width=True):
                                 st.session_state.pending_page += 1
                                 st.rerun()
-                        
-                        # Show current page info
-                        st.markdown(f"<div style='text-align: center; margin-top: 8px; font-size: 0.85rem; color: #666;'>Page {st.session_state.pending_page + 1} of {total_pages}</div>", unsafe_allow_html=True)
                 
-                # --- Right Column: Validation Panel ---
                 with col_right:
-                    st.markdown("### 🧩 Validation Decision")
-                    
-                    selected_case = next((c for c in pending_ambiguous_cases if c["case_id"] == selected_case_id), None)
-                    
-                    if selected_case:
-                        risk_score = extract_risk_score(selected_case.get('risk_display', 'N/A'))
-                        risk_percentage = int(risk_score * 100)
+                    with st.container(border=True):
+                        st.markdown("### 🧩 Validation Decision")
                         
-                        # Determine risk level for display
-                        if risk_percentage >= 80:
-                            risk_level_display = "🔴 High Risk"
-                            risk_color = "#DC2626"
-                        elif risk_percentage >= 60:
-                            risk_level_display = "🟠 Medium Risk"
-                            risk_color = "#D97706"
+                        selected_case = next((c for c in pending_cases if c["case_id"] == selected_case_id), None)
+                        
+                        if selected_case:
+                            risk_score = extract_risk_score(selected_case.get('risk_display', 'N/A'))
+                            risk_pct = int(risk_score * 100)
+                            
+                            st.markdown(f"**Case:** `{selected_case['case_id']}`")
+                            st.markdown(f"**💰 Amount:** {selected_case.get('amount_formatted', 'N/A')}")
+                            st.markdown(f"**📊 Risk Score:** {risk_pct}%")
+                            st.markdown(f"**📅 Date:** {selected_case.get('transaction_date', 'N/A')}")
+                            
+                            st.markdown("---")
+                            
+                            notes = st.text_area("💬 Feedback Notes", value=st.session_state.notes, placeholder="Add feedback...", height=80, key="validation_notes")
+                            st.session_state.notes = notes
+                            
+                            st.markdown("---")
+                            
+                            col_a, col_b, col_c = st.columns(3)
+                            with col_a:
+                                if st.button("✅ Confirm Fraud", use_container_width=True, type="primary"):
+                                    handle_validate(selected_case["case_id"], "confirmed", "Confirmed Fraud", notes)
+                            with col_b:
+                                if st.button("🟢 Legitimate", use_container_width=True):
+                                    handle_validate(selected_case["case_id"], "rejected", "Legitimate", notes)
+                            with col_c:
+                                if st.button("🟣 Escalate", use_container_width=True):
+                                    handle_validate(selected_case["case_id"], "escalated", "Escalated", notes)
+                            
+                            if st.button("🔍 Inspect Case", use_container_width=True):
+                                st.session_state.selected_case_id = selected_case["case_id"]
+                                st.query_params["page"] = "Drill-Down Inspection"
+                                st.query_params["case_id"] = selected_case["case_id"]
+                                st.rerun()
                         else:
-                            risk_level_display = "🟢 Low Risk"
-                            risk_color = "#059669"
-                        
-                        st.markdown(f"#### Selected Case: `{selected_case['case_id']}`")
-                        
-                        # Display case details in a clean format (only Amount and Risk Score)
-                        detail_col1, detail_col2 = st.columns(2)
-                        with detail_col1:
-                            st.write("**💰 Amount:**")
-                            st.write(selected_case.get('amount_formatted', 'N/A'))
-                        with detail_col2:
-                            st.write("**📊 Risk Score:**")
-                            st.markdown(f"<span style='color: {risk_color}; font-weight: 600;'>{risk_percentage}% ({risk_level_display})</span>", unsafe_allow_html=True)
-                        
-                        st.markdown("---")
-                        
-                        # Notes field
-                        notes = st.text_area(
-                            "💬 Feedback Notes",
-                            value=st.session_state.notes,
-                            placeholder="Add your feedback or observations here...",
-                            height=100,
-                            key="validation_notes"
-                        )
-                        st.session_state.notes = notes
-                        
-                        st.markdown("---")
-                        
-                        # Decision buttons
-                        st.markdown("**Choose Action:**")
-                        col_a, col_b, col_c = st.columns(3)
-                        with col_a:
-                            if st.button("✅ Confirm Fraud", use_container_width=True, type="primary"):
-                                handle_validate(selected_case["case_id"], "confirmed")
-                        with col_b:
-                            if st.button("🟢 Legitimate", use_container_width=True):
-                                handle_validate(selected_case["case_id"], "rejected")
-                        with col_c:
-                            if st.button("🟣 Escalate", use_container_width=True):
-                                handle_validate(selected_case["case_id"], "escalated")
-                        
-                        st.markdown("---")
-                        
-                        # Inspect button - Using query params for navigation
-                        if st.button("🔍 Inspect Case in Detail", use_container_width=True, key=f"inspect_btn_{selected_case['case_id']}"):
-                            st.session_state.selected_case_id = selected_case["case_id"]
-                            # Use query parameters to trigger navigation
-                            st.query_params["page"] = "Drill-Down Inspection"
-                            st.query_params["case_id"] = selected_case["case_id"]
-                            st.rerun()
-                    else:
-                        st.info("👈 Select a case from the left panel to begin validation")
+                            st.info("👈 Select a case")
             else:
-                st.info("📭 No pending cases. All cases have been confirmed.")
+                st.success("✅ No pending cases!")
         
-        # --- Tab 2: Validated Cases ---
+        # --- Tab 2: Validated Cases (View Only) ---
         with tab2:
-            st.caption(f"All validated cases (auto-confirmed + manually validated) (Total: {len(confirmed_cases)} cases)")
+            st.caption(f"Validated cases: {len(validated_cases_list)}")
             
-            if confirmed_cases:
-                # Create a DataFrame for display with additional columns
-                display_data = []
-                for case in confirmed_cases:
-                    risk_display = case.get('risk_display', 'N/A')
-                    risk_score = extract_risk_score(risk_display)
-                    risk_percentage = f"{int(risk_score * 100)}%"
-                    
-                    # Determine validation status
-                    validation_status = case.get('actual_fraud', 'N/A')
-                    if validation_status == 'confirmed':
-                        validated_status = "Confirmed Fraud"
-                    elif validation_status == 'rejected':
-                        validated_status = "Legitimate"
-                    elif validation_status == 'escalated':
-                        validated_status = "Escalated"
-                    elif risk_score > 0.90:
-                        validated_status = "Auto-Confirmed"
-                    else:
-                        validated_status = "N/A"
-                    
-                    display_data.append({
-                        "Case ID": case.get('case_id', 'N/A'),
-                        "Timestamp": case.get('created_at', 'N/A'),
-                        "Amount": case.get('amount_formatted', 'N/A'),
-                        "Risk Score": risk_percentage,
-                        "Sentiment": case.get('sentiment', 'N/A'),
-                        "Fraud Terms": case.get('fraud_terms', 'N/A'),
-                        "Complaint Link": case.get('complaint_link', 'N/A'),
-                        "Customer History": case.get('customer_history', 'N/A'),
-                        "Model Prediction": "N/A",  # Placeholder
-                        "Validated": validated_status,
-                        "SHAP": "N/A",  # Placeholder
-                        "Key Reason": "N/A",  # Placeholder
-                    })
+            if validated_cases_list:
+                display_data = [{
+                    "Case ID": v.get('case_id', 'N/A'),
+                    "Valid Type": v.get('valid_type', 'N/A'),
+                    "Validated By": v.get('validated', 'N/A'),
+                    "Date": v.get('timestamp', 'N/A')[:10] if v.get('timestamp') else 'N/A'
+                } for v in validated_cases_list[:200]]
                 
-                df_display = pd.DataFrame(display_data)
+                st.dataframe(pd.DataFrame(display_data), use_container_width=True, hide_index=True)
                 
-                # Show the table with new columns
-                st.dataframe(
-                    df_display,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Case ID": st.column_config.TextColumn("Case ID", width="medium"),
-                        "Timestamp": st.column_config.DatetimeColumn("Timestamp", width="medium"),
-                        "Amount": st.column_config.TextColumn("Amount", width="small"),
-                        "Risk Score": st.column_config.TextColumn("Risk Score", width="small"),
-                        "Sentiment": st.column_config.TextColumn("Sentiment", width="small"),
-                        "Fraud Terms": st.column_config.TextColumn("Fraud Terms", width="medium"),
-                        "Complaint Link": st.column_config.TextColumn("Complaint Link", width="medium"),
-                        "Customer History": st.column_config.TextColumn("Customer History", width="medium"),
-                        "Model Prediction": st.column_config.TextColumn("Model Prediction", width="small"),
-                        "Validated": st.column_config.TextColumn("Validated", width="small"),
-                        "SHAP": st.column_config.TextColumn("SHAP", width="small"),
-                        "Key Reason": st.column_config.TextColumn("Key Reason", width="large"),
-                    }
+                if st.button("📥 Export Full List", use_container_width=True):
+                    export_data = [{
+                        "Case ID": v.get('case_id', 'N/A'),
+                        "Amount": v.get('amount', 'N/A'),
+                        "Risk Score": v.get('risk_score', 'N/A'),
+                        "Valid Type": v.get('valid_type', 'N/A'),
+                        "Validated By": v.get('validated', 'N/A'),
+                        "Feedback Notes": v.get('feedback_notes', 'N/A')
+                    } for v in validated_cases_list]
+                    export_df = pd.DataFrame(export_data)
+                    csv = export_df.to_csv(index=False)
+                    st.download_button("Download CSV", data=csv, file_name=f"validated_cases_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+            else:
+                st.info("No validated cases yet")
+        
+        # --- Tab 3: Re-validate Cases (No Pagination) ---
+        with tab3:
+            st.caption(f"Revalidate cases that have already been validated (Total: {len(validated_cases_list)} cases)")
+            
+            if validated_cases_list:
+                # Create selectbox with all validated cases (no pagination)
+                revalidation_options = {f"{v['case_id']} - {v.get('amount', 'N/A')} (Current: {v.get('valid_type', 'N/A')})": v['case_id'] 
+                                        for v in validated_cases_list}
+                
+                selected_revalidation = st.selectbox(
+                    "Select a validated case to revalidate:",
+                    options=list(revalidation_options.keys()),
+                    index=None,
+                    placeholder="Select a case...",
+                    key="revalidation_select"
                 )
                 
-                # Export button for confirmed cases
-                col1, col2, col3 = st.columns([1, 2, 1])
-                with col2:
-                    if st.button("📥 Export Confirmed Cases to CSV", use_container_width=True):
-                        export_df = pd.DataFrame(display_data)
-                        csv = export_df.to_csv(index=False)
-                        st.download_button(
-                            label="Download CSV",
-                            data=csv,
-                            file_name=f"confirmed_cases_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                            mime="text/csv",
-                            key="export_confirmed"
+                if selected_revalidation:
+                    selected_case_id_reval = revalidation_options[selected_revalidation]
+                    selected_case = next((v for v in validated_cases_list if v["case_id"] == selected_case_id_reval), None)
+                    
+                    if selected_case:
+                        st.markdown("---")
+                        st.markdown(f"### 🔄 Revalidate Case: `{selected_case['case_id']}`")
+                        
+                        # Display case information
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown(f"**💰 Amount:** {selected_case.get('amount', 'N/A')}")
+                            st.markdown(f"**📅 Transaction Date:** {selected_case.get('transaction_date', 'N/A')}")
+                        with col2:
+                            st.markdown(f"**📊 Risk Score:** {selected_case.get('risk_score', 'N/A')}")
+                            complaint_link = selected_case.get('complaint_link', 'N/A')
+                            if complaint_link and str(complaint_link).strip() and complaint_link != 'N/A':
+                                st.markdown(f"**🔗 Complaint Link:** ✅ Linked")
+                            else:
+                                st.markdown(f"**🔗 Complaint Link:** ❌ No link")
+                        
+                        st.markdown("---")
+                        
+                        # Current validation info
+                        st.markdown("#### Current Validation Information")
+                        col_curr1, col_curr2, col_curr3 = st.columns(3)
+                        with col_curr1:
+                            st.markdown(f"**Validated By:** {selected_case.get('validated', 'N/A')}")
+                        with col_curr2:
+                            st.markdown(f"**Valid Type:** {selected_case.get('valid_type', 'N/A')}")
+                        with col_curr3:
+                            updated_at = selected_case.get('updated_at', selected_case.get('timestamp', 'N/A'))
+                            st.markdown(f"**Last Updated:** {updated_at[:10] if updated_at else 'N/A'}")
+                        
+                        st.markdown(f"**Current Feedback Notes:**")
+                        st.info(selected_case.get('feedback_notes', 'No feedback notes provided.'))
+                        
+                        st.markdown("---")
+                        
+                        # Update form
+                        st.markdown("#### Update Validation Decision")
+                        
+                        updated_notes = st.text_area(
+                            "📝 Updated Feedback Notes",
+                            value=selected_case.get('feedback_notes', ''),
+                            placeholder="Add your updated feedback or observations here...",
+                            height=100,
+                            key="revalidation_notes"
                         )
+                        
+                        st.markdown("**Select New Action:**")
+                        col_update_a, col_update_b, col_update_c = st.columns(3)
+                        
+                        with col_update_a:
+                            if st.button("✅ Revalidate as Confirmed Fraud", use_container_width=True, type="primary", key="reval_confirmed"):
+                                st.session_state.confirm_update = {
+                                    "case_id": selected_case['case_id'],
+                                    "valid_type": "Confirmed Fraud",
+                                    "notes": updated_notes
+                                }
+                                st.rerun()
+                        
+                        with col_update_b:
+                            if st.button("🟢 Revalidate as Legitimate", use_container_width=True, key="reval_legitimate"):
+                                st.session_state.confirm_update = {
+                                    "case_id": selected_case['case_id'],
+                                    "valid_type": "Legitimate",
+                                    "notes": updated_notes
+                                }
+                                st.rerun()
+                        
+                        with col_update_c:
+                            if st.button("🟣 Revalidate as Escalated", use_container_width=True, key="reval_escalated"):
+                                st.session_state.confirm_update = {
+                                    "case_id": selected_case['case_id'],
+                                    "valid_type": "Escalated",
+                                    "notes": updated_notes
+                                }
+                                st.rerun()
+                
+                # Confirmation dialog
+                if st.session_state.confirm_update:
+                    case_id = st.session_state.confirm_update["case_id"]
+                    valid_type = st.session_state.confirm_update["valid_type"]
+                    notes = st.session_state.confirm_update["notes"]
+                    
+                    st.warning(f"⚠️ Are you sure you want to revalidate Case {case_id} to '{valid_type}' as {user_email}?")
+                    st.caption("This will update the validation record and cannot be undone.")
+                    
+                    col_confirm1, col_confirm2 = st.columns(2)
+                    with col_confirm1:
+                        if st.button("✅ Yes, Revalidate Case", use_container_width=True):
+                            handle_revalidation(case_id, valid_type, notes)
+                            st.session_state.confirm_update = None
+                            st.rerun()
+                    with col_confirm2:
+                        if st.button("❌ No, Cancel", use_container_width=True):
+                            st.session_state.confirm_update = None
+                            st.rerun()
             else:
-                st.info("📭 No confirmed cases yet. Cases will appear here when confirmed (auto or manual).")
-
+                st.info("📭 No validated cases available for revalidation yet.")
+    
     render()

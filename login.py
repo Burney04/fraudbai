@@ -26,11 +26,32 @@ def show():
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
             color: black;
         }
-        /* Center the login button */
-        .stForm button[type="secondary"] {
-            display: flex;
-            justify-content: center;
-            align-items: center;
+        /* Style for form buttons - keep consistent width */
+        .stForm button {
+            width: 100% !important;
+        }
+        /* Fix for password field - prevent any interference with the show/hide button */
+        .stTextInput input {
+            text-align: left !important;
+            padding-right: 2.5rem !important;
+        }
+        /* Ensure the password toggle button stays on the right and centered vertically */
+        .stTextInput button {
+            position: absolute !important;
+            right: 0 !important;
+            top: 55% !important;
+            transform: translateY(-50%) !important;
+            width: auto !important;
+            min-width: unset !important;
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 10px !important;
+            margin-top: 2px !important;
+        }
+        /* Adjust the container height if needed */
+        .stTextInput > div {
+            position: relative !important;
         }
         /* Style for the forgot password link */
         .forgot-link {
@@ -49,13 +70,6 @@ def show():
             border-radius: 5px;
             margin: 10px 0;
             text-align: center;
-        }
-        /* Center the login button container */
-        .login-button-container {
-            display: flex;
-            justify-content: center;
-            margin-top: 10px;
-            margin-bottom: 10px;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -118,24 +132,14 @@ def show():
             email = st.text_input("Email Address", placeholder="Enter your email")
             password = st.text_input("Password", placeholder="Enter your password", type="password")
             
-            # Create columns for forgot password and empty space
-            col1, col2, col3 = st.columns([1, 1, 1])
-            
-            with col2:
-                # Center the forgot password button
-                forgot = st.form_submit_button("Forgot password?", use_container_width=True)
+            # Login button - full width, centered
+            login_button = st.form_submit_button("🔐 Login", use_container_width=True)
             
             # Add some spacing
             st.write("")
             
-            # Center the login button using columns
-            left, center, right = st.columns([1, 2, 1])
-            with center:
-                login_button = st.form_submit_button("🔐 Login", use_container_width=True)
-
-            if forgot:
-                st.session_state.show_forgot_password = True
-                st.rerun()
+            # Forgot password button - full width, centered
+            forgot = st.form_submit_button("Forgot password?", use_container_width=True)
 
             if login_button:
                 if not email or not password:
@@ -154,6 +158,10 @@ def show():
                         st.rerun()
                     else:
                         st.error(f"❌ Login failed: {err or 'Invalid email or password'}")
+
+            if forgot:
+                st.session_state.show_forgot_password = True
+                st.rerun()
 
         st.divider()
         

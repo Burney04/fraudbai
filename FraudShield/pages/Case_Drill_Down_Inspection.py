@@ -159,10 +159,15 @@ def show():
             'transaction_date': pd.date_range(start='2023-01-01', periods=n_samples, freq='h')[:n_samples],
             'amount_formatted': [f"RM {np.random.uniform(10, 50000):,.2f}" for _ in range(n_samples)],
             'risk_display': np.random.choice(risk_formats, n_samples),
-            'merchant': np.random.choice(['TechMart', 'Shopee', 'Lazada', 'Amazon', 'Grab'], n_samples),
-            'location': np.random.choice(['Kuala Lumpur', 'Penang', 'Johor Bahru', 'Selangor', 'Sabah'], n_samples),
+            'sentiment': np.random.choice(['Positive', 'Neutral', 'Negative'], n_samples),
+            'fraud_terms': np.random.choice(['scam', 'fraud', 'unauthorized', 'chargeback', 'dispute'], n_samples),
+            'complaint_link': np.random.choice(['https://example.com/complaint1', 'https://example.com/complaint2', ''], n_samples),
+            'customer_history': np.random.choice(['New', 'Existing', 'VIP'], n_samples),
+            'actual_fraud': np.random.choice(['confirmed', 'rejected', ''], n_samples, p=[0.15, 0.7, 0.15]),
             'card_number': [f"**** **** **** {np.random.randint(1000, 9999)}" for _ in range(n_samples)],
             'bank': np.random.choice(['Maybank', 'CIMB', 'Public Bank', 'RHB', 'Hong Leong'], n_samples),
+            'merchant': np.random.choice(['TechMart', 'Shopee', 'Lazada', 'Amazon', 'Grab'], n_samples),
+            'location': np.random.choice(['Kuala Lumpur', 'Penang', 'Johor Bahru', 'Selangor', 'Sabah'], n_samples),
             'complaint_text': [
                 "Customer reported unauthorized transaction. Suspicious activity detected.",
                 "Transaction occurred at unusual time with immediate action needed.",
@@ -186,6 +191,22 @@ def show():
         
         return df
 
+    # --- Load validated cases for additional info ---
+    @st.cache_data(ttl=300)
+    def load_validated_case_info(case_id):
+        """Load validation info from validated_cases table."""
+        try:
+            response = supabase.table("validated_cases") \
+                .select("valid_type, validated") \
+                .eq("case_id", case_id) \
+                .execute()
+            
+            if response.data:
+                return response.data[0]
+            return None
+        except:
+            return None
+
     # --------------------------
     # LOAD DATA
     # --------------------------
@@ -195,6 +216,8 @@ def show():
     if error:
         st.error(error)
         st.info("Using sample data for demonstration.")
+    
+    st.divider()
     
     # --------------------------
     # CASE SELECTION
@@ -219,231 +242,307 @@ def show():
     selected_case_id = st.selectbox(
         "Type or Select a case to inspect",
         options=case_options,
-        index=default_index,  # Now this is a regular Python int
+        index=default_index,
         key="case_inspect_select"
     )
     
     # Get the selected case data
     selected_case = df[df['case_id'] == selected_case_id].iloc[0]
     
-    st.divider()
+    # Load validation info from validated_cases table
+    validation_info = load_validated_case_info(selected_case_id)
     
     # --------------------------
     # DISPLAY SELECTED CASE
     # --------------------------
     
-    # Extract risk information (now using the enhanced extraction)
+    # Extract risk information
     risk_score = selected_case.get('risk_score_numeric', 0.5)
     risk_percentage = selected_case.get('risk_percentage', f"{int(risk_score*100)}%")
     risk_level = selected_case.get('risk_level', 'Unknown')
     original_risk_display = selected_case.get('risk_display', 'N/A')
     
-    # Determine risk color and badge
+    # Determine risk badge (without emoji)
     if risk_level == 'High':
-        risk_color = "red"
-        risk_badge = "🔴 High Risk"
-        risk_emoji = "🟥"
+        risk_badge = "High Risk"
+        risk_class = "risk-high"
     elif risk_level == 'Medium':
-        risk_color = "orange"
-        risk_badge = "🟠 Medium Risk"
-        risk_emoji = "🟠"
+        risk_badge = "Medium Risk"
+        risk_class = "risk-medium"
     else:
-        risk_color = "green"
-        risk_badge = "🟢 Low Risk"
-        risk_emoji = "🟢"
+        risk_badge = "Low Risk"
+        risk_class = "risk-low"
     
-    # --------------------------
-    # CASE OVERVIEW
-    # --------------------------
-    with st.container():
-        st.markdown("### 🚨 Case Overview")
-        
-        # Header with Case ID and Risk
-        col_title1, col_title2 = st.columns([2, 1])
-        with col_title1:
-            st.markdown(f"**Case ID:** {selected_case.get('case_id', 'N/A')}")
-        with col_title2:
-            st.markdown(f"**Risk Score:** **{risk_percentage}** ({risk_badge})")
-        
-        # Date and Time
-        if 'date_str' in selected_case:
-            st.markdown(f"**Date:** {selected_case['date_str']}")
-        
-        # Key information in columns
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.write("**🏦 Bank:**", selected_case.get('bank', 'N/A'))
-            st.write("**🛒 Merchant:**", selected_case.get('merchant', 'N/A'))
-        with col2:
-            st.write("**📍 Location:**", selected_case.get('location', 'N/A'))
-            st.write("**🕓 Transaction Time:**", selected_case.get('time', 'N/A'))
-        with col3:
-            st.write("**💰 Amount:**", selected_case.get('amount_formatted', 'N/A'))
-    
-    st.divider()
-    
-    # --------------------------
-    # STRUCTURED FEATURES
-    # --------------------------
-    st.subheader("📋 Structured Features")
-    
-    # Create structured features from available data
-    structured_features = []
-    
-    # Transaction Amount
-    structured_features.append({
-        "label": "Transaction Amount",
-        "value": selected_case.get('amount_formatted', 'N/A'),
-        "risk": "N/A"
-    })
-    
-    # Risk Score (with percentage)
-    structured_features.append({
-        "label": "Risk Score",
-        "value": f"{risk_percentage} ({risk_level} Risk)",
-        "risk": "N/A"
-    })
-    
-    # Time of Day (if available)
-    if 'time' in selected_case:
-        hour = int(selected_case['time'].split(':')[0])
-        if hour < 6 or hour > 22:
-            time_risk = "high"
-            time_desc = f"{selected_case['time']} (Off-hours)"
+    # Determine Fraud Status (only show for risk score > 90%)
+    if risk_score > 0.90:
+        actual_fraud = selected_case.get('actual_fraud', 'N/A')
+        if actual_fraud == 'confirmed':
+            fraud_status = "✅ Confirmed Fraud"
+        elif actual_fraud == 'rejected':
+            fraud_status = "🟢 Legitimate"
+        elif actual_fraud == 'escalated':
+            fraud_status = "🟣 Escalated"
         else:
-            time_risk = "low"
-            time_desc = f"{selected_case['time']} (Business hours)"
-        structured_features.append({
-            "label": "Time of Day",
-            "value": time_desc,
-            "risk": "N/A"
-        })
-    
-    # Transaction Date (if available)
-    if 'date_str' in selected_case:
-        structured_features.append({
-            "label": "Transaction Date",
-            "value": selected_case['date_str'],
-            "risk": "N/A"
-        })
-    
-    # Merchant (if available)
-    if 'merchant' in selected_case:
-        merchant_risk = "medium" if "electronics" in str(selected_case['merchant']).lower() or "high-value" in str(selected_case['merchant']).lower() else "low"
-        structured_features.append({
-            "label": "Merchant Category",
-            "value": selected_case['merchant'],
-            "risk": merchant_risk
-        })
-    
-    # Display features in grid
-    cols = st.columns(3)
-    for i, feature in enumerate(structured_features):
-        col = cols[i % 3]
-        with col:
-            color = "red" if feature["risk"] == "high" else "orange" if feature["risk"] == "medium" else "green"
-            st.markdown(
-                f"<div style='border:1px solid #ddd;padding:10px;border-radius:8px;"
-                f"background-color:{color}10;margin-bottom:10px;'>"
-                f"<b>{feature['label']}</b><br>"
-                f"{feature['value']}<br>"
-                f"<span style='color:{color};font-weight:bold;text-transform:capitalize;'>"
-                f"{feature['risk']}</span></div>",
-                unsafe_allow_html=True,
-            )
-    
-    st.divider()
-    
-    # --------------------------
-    # NLP ANALYSIS (Complaint Text)
-    # --------------------------
-    st.subheader("🧠 NLP Analysis")
-    st.write("Extracted insights from complaint text:")
-    
-    if 'complaint_text' in selected_case and pd.notna(selected_case['complaint_text']):
-        complaint_text = selected_case['complaint_text']
-        st.info(complaint_text[:500] + ("..." if len(str(complaint_text)) > 500 else ""))
-        
-        # Basic NLP-like insights (simplified)
-        st.markdown("**Key Insights:**")
-        insights = []
-        
-        # Check for common fraud indicators
-        complaint_lower = str(complaint_text).lower()
-        if "unauthorized" in complaint_lower:
-            insights.append("⚠️ Unauthorized transaction reported")
-        if "scam" in complaint_lower or "fraud" in complaint_lower:
-            insights.append("🚨 Fraud-related keywords detected")
-        if "urgent" in complaint_lower or "immediate" in complaint_lower:
-            insights.append("⏰ Urgency language detected - potential pressure tactic")
-        if "sms" in complaint_lower or "message" in complaint_lower:
-            insights.append("📱 Communication channel mentioned")
-        
-        if insights:
-            for insight in insights:
-                st.write(f"- {insight}")
-        else:
-            st.write("- No specific fraud indicators detected in complaint text")
+            fraud_status = "⏳ Pending Validation"
     else:
-        st.info("No complaint text available for this case.")
-    
-    st.divider()
+        fraud_status = "N/A"
     
     # --------------------------
-    # SHAP EXPLAINABILITY
+    # TABS FOR CASE DETAILS WITH SPACING
     # --------------------------
-    st.subheader("📊 Model Explainability (SHAP)")
-    st.write(f"Model explainability for **{selected_case_id}**")
+    # Add custom CSS to increase tab spacing
+    st.markdown(
+        """
+        <style>
+        /* Increase spacing between tabs */
+        button[data-baseweb="tab"] {
+            margin-right: 110px !important;
+            margin-left: 110px !important;
+            padding-left: 15px !important;
+            padding-right: 15px !important;
+        }
+        
+        /* Adjust the tab container to center the tabs with spacing */
+        div[data-baseweb="tab-list"] {
+            gap: 30px !important;
+            justify-content: center !important;
+        }
+        
+        /* Optional: Add a subtle separator between tabs */
+        button[data-baseweb="tab"]:not(:last-child)::after {
+            content: "|";
+            position: absolute;
+            right: -20px;
+            color: #E5E7EB;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
     
-    # Create a progress bar for risk score (using percentage)
-    st.markdown(f"**Risk Score: {risk_percentage}**")
-    st.progress(risk_score)
-    
-    # Simple feature importance visualization
-    st.markdown("**Top contributing factors:**")
-    st.write(f"**Will be implemented soon**: N/A")
-    
-    st.divider()
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📋 Case Overview", 
+        "📊 Features", 
+        "🧠 NLP Analysis", 
+        "📈 Model Explainability (SHAP)"
+    ])
     
     # --------------------------
-    # ACTION BUTTONS
+    # TAB 1: CASE OVERVIEW
     # --------------------------
-    col1, col2, col3 = st.columns([1, 1, 2])
-    with col1:
-        if st.button("📄 Export Report", use_container_width=True):
-            # Create export data
-            export_data = {
-                "Case ID": selected_case_id,
-                "Date": selected_case.get('date_str', 'N/A'),
-                "Time": selected_case.get('time', 'N/A'),
-                "Amount": selected_case.get('amount_formatted', 'N/A'),
-                "Risk Score": risk_percentage,
-                "Risk Level": risk_level,
-                "Original Risk Value": original_risk_display,
-                "Merchant": selected_case.get('merchant', 'N/A'),
-                "Location": selected_case.get('location', 'N/A'),
-                "Bank": selected_case.get('bank', 'N/A'),
-                "Card Number": selected_case.get('card_number', 'N/A'),
+    with tab1:
+        # CSS styling for overview with larger font sizes
+        st.markdown(
+            """
+            <style>
+            .overview-label {
+                font-size: 1rem !important;
+                font-weight: 600 !important;
+                color: #6B7280 !important;
+                margin-bottom: 4px !important;
             }
-            export_df = pd.DataFrame([export_data])
-            csv = export_df.to_csv(index=False)
-            st.download_button(
-                label="Download CSV",
-                data=csv,
-                file_name=f"case_{selected_case_id}_export.csv",
-                mime="text/csv",
-                key=f"export_{selected_case_id}"  # Add unique key to avoid conflicts
+            .overview-value {
+                font-size: 1.35rem !important;
+                font-weight: 600 !important;
+                color: #1F2937 !important;
+                margin-bottom: 20px !important;
+            }
+            .risk-badge {
+                display: inline-block;
+                padding: 6px 14px !important;
+                border-radius: 24px !important;
+                font-size: 1rem !important;
+                font-weight: 600 !important;
+            }
+            .risk-high { background-color: #FEE2E2; color: #DC2626; }
+            .risk-medium { background-color: #FEF3C7; color: #D97706; }
+            .risk-low { background-color: #D1FAE5; color: #059669; }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        # Row 1: Case ID and Date
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f'<div class="overview-label">📌 Case ID</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="overview-value">{selected_case.get("case_id", "N/A")}</div>', unsafe_allow_html=True)
+        with col2:
+            st.markdown(f'<div class="overview-label">📅 Date</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="overview-value">{selected_case.get("date_str", "N/A")}</div>', unsafe_allow_html=True)
+        
+        # Row 2: Risk Score and Amount
+        col3, col4 = st.columns(2)
+        with col3:
+            st.markdown(f'<div class="overview-label">🎯 Risk Score</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="overview-value"><span class="risk-badge {risk_class}">{risk_percentage} ({risk_badge})</span></div>',
+                unsafe_allow_html=True
             )
+        with col4:
+            st.markdown(f'<div class="overview-label">💰 Amount</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="overview-value">{selected_case.get("amount_formatted", "N/A")}</div>', unsafe_allow_html=True)
     
-    with col2:
-        if st.button("🚀 Send to Validation Queue", use_container_width=True):
-            # Store in session state and redirect
-            st.session_state.selected_case_id = selected_case_id
-            st.session_state.page = "Case_Validation"
-            st.success(f"Case {selected_case_id} sent to validation queue ✅")
-            st.rerun()
+    # --------------------------
+    # TAB 2: FEATURES (Structured & Unstructured)
+    # --------------------------
+    with tab2:
+        # ----- STRUCTURED FEATURES -----
+        st.subheader("📊 Structured Features")
+        
+        structured_features = []
+        
+        # Transaction Amount
+        structured_features.append({
+            "label": "Transaction Amount",
+            "value": selected_case.get('amount_formatted', 'N/A')
+        })
+        
+        # Risk Score
+        structured_features.append({
+            "label": "Risk Score",
+            "value": f"{risk_percentage} ({risk_level} Risk)"
+        })
+        
+        # Transaction Date
+        if 'date_str' in selected_case:
+            structured_features.append({
+                "label": "Transaction Date",
+                "value": selected_case['date_str']
+            })
+        
+        # Customer History (replacing Sentiment)
+        if 'customer_history' in selected_case:
+            customer_history = selected_case.get('customer_history', 'N/A')
+            structured_features.append({
+                "label": "Customer History",
+                "value": customer_history
+            })
+        
+        # Valid Type (from validated_cases table)
+        valid_type_value = validation_info.get('valid_type', 'N/A') if validation_info else 'N/A'
+        structured_features.append({
+            "label": "Valid Type",
+            "value": valid_type_value
+        })
+        
+        # Validated By (from validated_cases table)
+        validated_by_value = validation_info.get('validated', 'N/A') if validation_info else 'N/A'
+        structured_features.append({
+            "label": "Validated By",
+            "value": validated_by_value
+        })
+        
+        # Display structured features in grid (3 columns)
+        cols = st.columns(3)
+        for i, feature in enumerate(structured_features):
+            col = cols[i % 3]
+            with col:
+                st.markdown(
+                    f"<div style='border:1px solid #ddd;padding:10px;border-radius:8px;"
+                    f"background-color:#F8FAFF;margin-bottom:10px;'>"
+                    f"<b>{feature['label']}</b><br>"
+                    f"{feature['value']}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+        
+        st.divider()
+        
+        # ----- UNSTRUCTURED FEATURES -----
+        st.subheader("📝 Unstructured Features")
+        
+        unstructured_features = []
+        
+        # Sentiment
+        if 'sentiment' in selected_case:
+            sentiment_value = selected_case.get('sentiment', 'N/A')
+            unstructured_features.append({
+                "label": "Sentiment",
+                "value": sentiment_value
+            })
+        
+        # Fraud Terms
+        if 'fraud_terms' in selected_case:
+            fraud_terms_value = selected_case.get('fraud_terms', 'N/A')
+            unstructured_features.append({
+                "label": "Fraud Terms",
+                "value": fraud_terms_value
+            })
+        
+        # Complaint Link - Check if complaint_link exists in fraud_cases table
+        if 'complaint_link' in selected_case:
+            complaint_link = selected_case.get('complaint_link', 'N/A')
+            if complaint_link and str(complaint_link).strip() and complaint_link != 'N/A':
+                unstructured_features.append({
+                    "label": "Complaint Link",
+                    "value": "✅ Linked to Complaint"
+                })
+            else:
+                unstructured_features.append({
+                    "label": "Complaint Link",
+                    "value": "❌ No Complaint Link"
+                })
+        
+        # Display unstructured features in grid (3 columns)
+        cols = st.columns(3)
+        for i, feature in enumerate(unstructured_features):
+            col = cols[i % 3]
+            with col:
+                st.markdown(
+                    f"<div style='border:1px solid #ddd;padding:10px;border-radius:8px;"
+                    f"background-color:#F8FAFF;margin-bottom:10px;'>"
+                    f"<b>{feature['label']}</b><br>"
+                    f"{feature['value']}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
     
-    with col3:
-        if st.button("🔙 Back to Filter Cases", use_container_width=True):
-            st.session_state.page = "filter_cases"
-            st.rerun()
+    # --------------------------
+    # TAB 3: NLP ANALYSIS
+    # --------------------------
+    with tab3:
+        st.write("Extracted insights from complaint text:")
+        
+        if 'complaint_text' in selected_case and pd.notna(selected_case['complaint_text']):
+            complaint_text = selected_case['complaint_text']
+            st.info(complaint_text[:500] + ("..." if len(str(complaint_text)) > 500 else ""))
+            
+            # Basic NLP-like insights (simplified)
+            st.markdown("**Key Insights:**")
+            insights = []
+            
+            # Check for common fraud indicators
+            complaint_lower = str(complaint_text).lower()
+            if "unauthorized" in complaint_lower:
+                insights.append("⚠️ Unauthorized transaction reported")
+            if "scam" in complaint_lower or "fraud" in complaint_lower:
+                insights.append("🚨 Fraud-related keywords detected")
+            if "urgent" in complaint_lower or "immediate" in complaint_lower:
+                insights.append("⏰ Urgency language detected - potential pressure tactic")
+            if "sms" in complaint_lower or "message" in complaint_lower:
+                insights.append("📱 Communication channel mentioned")
+            
+            if insights:
+                for insight in insights:
+                    st.write(f"- {insight}")
+            else:
+                st.write("- No specific fraud indicators detected in complaint text")
+        else:
+            st.info("No complaint text available for this case.")
+    
+    # --------------------------
+    # TAB 4: MODEL EXPLAINABILITY (SHAP)
+    # --------------------------
+    with tab4:
+        st.write(f"Model explainability for **{selected_case_id}**")
+        
+        # Create a progress bar for risk score (using percentage)
+        st.markdown(f"**Risk Score: {risk_percentage}**")
+        st.progress(risk_score)
+        
+        # Simple feature importance visualization
+        st.markdown("**Top contributing factors:**")
+        st.write(f"**Will be implemented soon**: N/A")
+    
+    st.divider()

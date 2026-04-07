@@ -11,34 +11,6 @@ def render_reports():
     st.caption("Comprehensive fraud analytics with explainability insights")
     st.divider()
 
-    # --- Controls ---
-    period = st.selectbox("Select Period", ["1 month", "3 months", "6 months", "1 year"], index=2, key="period_select")
-    st.write(f"Currently viewing **{period}** trend.")
-    export = st.button("Export Report", key="export_report_btn")
-    st.divider()
-
-    # --- KPI Cards ---
-    stats = [
-        {"title": "Total Transactions", "value": "52,340", "change": 15.3},
-        {"title": "Flagged Cases", "value": 142, "change": -8.2},
-        {"title": "Validated Cases", "value": 98, "change": 12.5},
-        {"title": "Amount Saved (RM)", "value": "932K", "change": 15.0},
-        {"title": "Threats Detected", "value": 337, "change": 8.0},
-    ]
-
-    cols = st.columns(len(stats))
-    for col, stat in zip(cols, stats):
-        color_mode = "inverse" if stat["title"] == "Threats Detected" else "normal"
-        with col:
-            st.metric(
-                label=stat["title"],
-                value=stat["value"],
-                delta=f"{stat['change']}%",
-                delta_color=color_mode,
-            )
-
-    st.divider()
-
     # --- Track notification state ---
     if 'limit_version' not in st.session_state:
         st.session_state.limit_version = 1
@@ -187,6 +159,15 @@ def render_reports():
     
     total_cases_in_db = get_total_case_count()
 
+    # --- KPI Data (moved inside Fraud Trends tab) ---
+    stats = [
+        {"title": "Total Transactions", "value": "52,340", "change": 15.3},
+        {"title": "Flagged Cases", "value": 142, "change": -8.2},
+        {"title": "Validated Cases", "value": 98, "change": 12.5},
+        {"title": "Amount Saved (RM)", "value": "932K", "change": 15.0},
+        {"title": "Threats Detected", "value": 337, "change": 8.0},
+    ]
+
     # --- Tabs ---
     st.markdown(
         """
@@ -213,19 +194,7 @@ def render_reports():
 
     # ---- Tab 1: View Alert ----
     with tab1:
-        st.subheader("🚨 Alert Queue")
-        st.caption(f"Fraud alerts requiring attention (showing first {CURRENT_LIMIT} cases)")
-        
-        # Show total cases info
-        if total_cases_in_db > CURRENT_LIMIT:
-            st.info(f"ℹ️ Showing first {CURRENT_LIMIT} cases. Total cases in database: {total_cases_in_db:,}. New cases beyond the first {CURRENT_LIMIT} will appear here as they move into the top {CURRENT_LIMIT}.")
-        
-        # Add a manual refresh button
-        col_refresh1, col_refresh2 = st.columns([1, 5])
-        with col_refresh1:
-            if st.button("🔄 Refresh Alerts", use_container_width=True, key="refresh_alerts_btn"):
-                st.cache_data.clear()
-                st.rerun()
+        st.subheader("Alert Queue")
         
         if not alert_df.empty:
             # Process the data to create the required columns
@@ -254,8 +223,6 @@ def render_reports():
             unknown_risk_count = len([a for a in alert_data if a['risk_level'] == 'Unknown'])
             
             # Alert Summary
-            st.markdown("### 📊 Alert Summary")
-            
             # Display risk breakdown in columns
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -269,6 +236,24 @@ def render_reports():
             
             st.divider()
             
+             # Show total cases info with refresh button inline
+            if total_cases_in_db > CURRENT_LIMIT:
+                # Create two columns for the info message and refresh button
+                info_col, refresh_col = st.columns([5, 1])
+                with info_col:
+                    st.info(f"ℹ️ Showing first {CURRENT_LIMIT} cases. Total cases in database: {total_cases_in_db:,}. New cases beyond the first {CURRENT_LIMIT} will appear here as they move into the top {CURRENT_LIMIT}.")
+                with refresh_col:
+                    if st.button("🔄 Refresh", key="refresh_alerts_btn", use_container_width=True):
+                        st.cache_data.clear()
+                        st.rerun()
+            else:
+                # Show just the refresh button if no info message
+                col1, col2, col3 = st.columns([4, 1, 4])
+                with col2:
+                    if st.button("🔄 Refresh Alerts", key="refresh_alerts_btn_solo", use_container_width=True):
+                        st.cache_data.clear()
+                        st.rerun()
+
             # Display the table
             st.dataframe(
                 df_alerts,
@@ -299,8 +284,26 @@ def render_reports():
         else:
             st.info("📭 No alert data available at this time.")
 
-    # ---- Tab 2: Fraud Trends ----
+    # ---- Tab 2: Fraud Trends (with KPI metrics now inside) ----
     with tab2:
+        # Display KPI metrics at the top of the Fraud Trends tab
+        st.subheader("Key Performance Indicators")
+        
+        # Create 5 columns for the 5 metrics
+        cols = st.columns(5)
+        for col, stat in zip(cols, stats):
+            color_mode = "inverse" if stat["title"] == "Threats Detected" else "normal"
+            with col:
+                st.metric(
+                    label=stat["title"],
+                    value=stat["value"],
+                    delta=f"{stat['change']}%",
+                    delta_color=color_mode,
+                )
+        
+        st.divider()
+        
+        # Original Fraud Trends content
         col1, _, col2 = st.columns([1, 0.05, 1])
         with col1:
             st.subheader("Fraud Detection Trends")
@@ -382,3 +385,15 @@ def render_reports():
         st.subheader("NLP Keyword Analysis")
         st.dataframe(nlp_keywords, use_container_width=True)
         st.warning("🧠 These keywords often indicate potential fraud risk.")
+    
+    # ---- Footer Controls (moved to bottom) ----
+    st.divider()
+    
+    # Period selector
+    period_value = st.selectbox("Select Period", ["1 month", "3 months", "6 months", "1 year"], index=2, key="period_select_bottom")
+    
+    # Display the current period message
+    st.write(f"Currently viewing **{period_value}** trend.")
+    
+    # Export Report button below the period display
+    st.button("Export Report", key="export_report_btn_bottom", use_container_width=True)
