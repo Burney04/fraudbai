@@ -5,11 +5,192 @@ from FraudShield.utils.supabase_client import supabase
 from datetime import datetime
 import time
 import re
+from io import BytesIO
+from reportlab.lib.pagesizes import letter, landscape
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+from reportlab.lib.units import inch
 
 def render_reports():
     st.title("📊 Fraud Detection Reports")
     st.caption("Comprehensive fraud analytics with explainability insights")
     st.divider()
+
+    # --- PDF Generation Function ---
+    def generate_pdf_report():
+        """Generate a PDF report with all charts and data."""
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+        styles = getSampleStyleSheet()
+        elements = []
+        
+        # Title
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=colors.HexColor('#1f2937'),
+            spaceAfter=30
+        )
+        elements.append(Paragraph("Fraud Detection Report", title_style))
+        elements.append(Spacer(1, 0.2 * inch))
+        
+        # Date and time
+        date_style = ParagraphStyle(
+            'DateStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=colors.gray
+        )
+        elements.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", date_style))
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # KPI Summary
+        elements.append(Paragraph("Key Performance Indicators", styles['Heading2']))
+        elements.append(Spacer(1, 0.1 * inch))
+        
+        # Create KPI table
+        kpi_data = [["Metric", "Value", "Change"]]
+        for stat in stats:
+            kpi_data.append([stat["title"], stat["value"], f"{stat['change']}%"])
+        
+        kpi_table = Table(kpi_data)
+        kpi_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ]))
+        elements.append(kpi_table)
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # Fraud Trends
+        elements.append(Paragraph("Fraud Detection Trends", styles['Heading2']))
+        elements.append(Spacer(1, 0.1 * inch))
+        
+        # Create fraud trend table
+        trend_data = [["Month", "Detected", "Prevented", "Saved (MYR)"]]
+        for _, row in fraud_trend.iterrows():
+            trend_data.append([row["Month"], row["Detected"], row["Prevented"], f"RM {row['Saved (MYR)']:,}"])
+        
+        trend_table = Table(trend_data)
+        trend_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ]))
+        elements.append(trend_table)
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # Geographic Distribution
+        elements.append(Paragraph("Geographic Fraud Distribution", styles['Heading2']))
+        elements.append(Spacer(1, 0.1 * inch))
+        
+        geo_data_list = [["Region", "Cases"]]
+        for _, row in geo_data.iterrows():
+            geo_data_list.append([row["Region"], row["Cases"]])
+        
+        geo_table = Table(geo_data_list)
+        geo_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ]))
+        elements.append(geo_table)
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # Validation Summary
+        elements.append(Paragraph("Validation Summary", styles['Heading2']))
+        elements.append(Spacer(1, 0.1 * inch))
+        
+        validation_data_list = [["Outcome", "Cases", "Percentage"]]
+        total_validation_cases = validation_data["Cases"].sum()
+        for _, row in validation_data.iterrows():
+            percentage = (row["Cases"] / total_validation_cases) * 100
+            validation_data_list.append([row["Outcome"], row["Cases"], f"{percentage:.1f}%"])
+        
+        validation_table = Table(validation_data_list)
+        validation_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ]))
+        elements.append(validation_table)
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # SHAP Feature Importance
+        elements.append(Paragraph("SHAP Feature Importance", styles['Heading2']))
+        elements.append(Spacer(1, 0.1 * inch))
+        
+        shap_data_list = [["Feature", "SHAP Value"]]
+        for _, row in shap_data.iterrows():
+            shap_data_list.append([row["Feature"], f"{row['SHAP Value']:.3f}"])
+        
+        shap_table = Table(shap_data_list)
+        shap_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ]))
+        elements.append(shap_table)
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # NLP Keywords
+        elements.append(Paragraph("NLP Keyword Analysis", styles['Heading2']))
+        elements.append(Spacer(1, 0.1 * inch))
+        
+        nlp_data_list = [["Keyword", "Frequency", "Risk Increase (%)", "SHAP Contribution"]]
+        for _, row in nlp_keywords.iterrows():
+            nlp_data_list.append([row["Keyword"], row["Frequency"], f"{row['Risk Increase (%)']}%", f"{row['SHAP Contribution']:.2f}"])
+        
+        nlp_table = Table(nlp_data_list)
+        nlp_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ]))
+        elements.append(nlp_table)
+        
+        # Build PDF
+        doc.build(elements)
+        buffer.seek(0)
+        return buffer
 
     # --- Track notification state ---
     if 'limit_version' not in st.session_state:
@@ -269,7 +450,7 @@ def render_reports():
                 }
             )
             
-            # Export button for alerts
+            # Export buttons for alerts
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
                 if st.button("📥 Export Alerts to CSV", use_container_width=True, key="export_alerts_btn"):
@@ -395,5 +576,57 @@ def render_reports():
     # Display the current period message
     st.write(f"Currently viewing **{period_value}** trend.")
     
-    # Export Report button below the period display
-    st.button("Export Report", key="export_report_btn_bottom", use_container_width=True)
+    # Export buttons (CSV and PDF)
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        if st.button("📊 Export Report as CSV", use_container_width=True, key="export_csv_btn"):
+            # Create a comprehensive CSV with all data
+            csv_data = []
+            
+            # Add KPI data
+            for stat in stats:
+                csv_data.append({"Section": "KPIs", "Metric": stat["title"], "Value": stat["value"], "Change": f"{stat['change']}%"})
+            
+            # Add fraud trend data
+            for _, row in fraud_trend.iterrows():
+                csv_data.append({"Section": "Fraud Trends", "Metric": f"{row['Month']} - Detected", "Value": row["Detected"], "Change": ""})
+                csv_data.append({"Section": "Fraud Trends", "Metric": f"{row['Month']} - Prevented", "Value": row["Prevented"], "Change": ""})
+                csv_data.append({"Section": "Fraud Trends", "Metric": f"{row['Month']} - Saved", "Value": f"RM {row['Saved (MYR)']:,}", "Change": ""})
+            
+            # Add geographic data
+            for _, row in geo_data.iterrows():
+                csv_data.append({"Section": "Geography", "Metric": row["Region"], "Value": row["Cases"], "Change": ""})
+            
+            # Add validation data
+            for _, row in validation_data.iterrows():
+                csv_data.append({"Section": "Validation", "Metric": row["Outcome"], "Value": row["Cases"], "Change": ""})
+            
+            # Add SHAP data
+            for _, row in shap_data.iterrows():
+                csv_data.append({"Section": "SHAP Analysis", "Metric": row["Feature"], "Value": row["SHAP Value"], "Change": ""})
+            
+            # Add NLP keywords
+            for _, row in nlp_keywords.iterrows():
+                csv_data.append({"Section": "NLP Keywords", "Metric": row["Keyword"], "Value": row["Frequency"], "Change": f"{row['Risk Increase (%)']}% increase"})
+            
+            export_df = pd.DataFrame(csv_data)
+            csv = export_df.to_csv(index=False)
+            st.download_button(
+                label="Download CSV",
+                data=csv,
+                file_name=f"fraud_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                key="download_csv"
+            )
+    
+    with col2:
+        if st.button("📄 Export Report as PDF", use_container_width=True, key="export_pdf_btn"):
+            with st.spinner("Generating PDF report..."):
+                pdf_buffer = generate_pdf_report()
+                st.download_button(
+                    label="Download PDF",
+                    data=pdf_buffer,
+                    file_name=f"fraud_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    mime="application/pdf",
+                    key="download_pdf"
+                )
