@@ -104,16 +104,19 @@ def show():
         return f"{int(risk_score * 100)}%"
 
     # --------------------------
-    # LOAD DATA FROM SUPABASE (LIMITED TO 1000 ROWS)
+    # LOAD DATA FROM SUPABASE (FIXED: Ordered and includes case 4000)
     # --------------------------
     @st.cache_data(ttl=300, max_entries=1)
     def load_fraud_cases():
-        """Load first 1000 fraud cases from Supabase."""
+        """Load fraud cases from Supabase with consistent ordering starting from case 4000."""
         try:
-            # Load only first 1000 records
+            # ✅ FIXED: Order by case_id ascending and use gte to ensure case 4000+ are included
+            # This ensures we always get cases starting from 4000 in ascending order
             response = supabase.table("fraud_cases") \
                 .select("*") \
-                .limit(1000) \
+                .gte('case_id', 'FR-2025-4000') \
+                .order('case_id', desc=False) \
+                .limit(2000) \
                 .execute()
             
             if response.data:
@@ -133,6 +136,10 @@ def show():
                 df['amount_numeric'] = df['amount_formatted'].apply(extract_amount)
                 df['risk_level'] = df['risk_display'].apply(get_risk_level)
                 
+                # Sort by numeric case_id to ensure correct order
+                df['case_id_num'] = df['case_id'].str.extract(r'(\d+)$').astype(int)
+                df = df.sort_values('case_id_num').drop('case_id_num', axis=1)
+                
                 return df, total_loaded, None
             else:
                 return get_sample_data(), 0, "No data found in the database"
@@ -140,7 +147,7 @@ def show():
         except Exception as e:
             error_msg = f"Error loading data from Supabase: {str(e)}"
             return get_sample_data(), 0, error_msg
-    
+
     def get_sample_data():
         """Return sample data if Supabase is unavailable."""
         # Create sample data (limited to 1000 for sample)
@@ -331,7 +338,7 @@ def show():
     # TAB 1: CASE OVERVIEW
     # --------------------------
     with tab1:
-        # CSS styling for overview with larger font sizes
+        # CSS styling for overview with theme-adaptive colors
         st.markdown(
             """
             <style>
@@ -346,6 +353,15 @@ def show():
                 font-weight: 600 !important;
                 color: #1F2937 !important;
                 margin-bottom: 20px !important;
+            }
+            /* Dark mode support for text colors */
+            @media (prefers-color-scheme: dark) {
+                .overview-label {
+                    color: #9CA3AF !important;
+                }
+                .overview-value {
+                    color: #F3F4F6 !important;
+                }
             }
             .risk-badge {
                 display: inline-block;
@@ -433,17 +449,19 @@ def show():
             "value": validated_by_value
         })
         
-        # Display structured features in grid (3 columns)
+        # Display structured features in grid (3 columns) - with theme-adaptive card backgrounds
         cols = st.columns(3)
         for i, feature in enumerate(structured_features):
             col = cols[i % 3]
             with col:
                 st.markdown(
-                    f"<div style='border:1px solid #ddd;padding:10px;border-radius:8px;"
-                    f"background-color:#F8FAFF;margin-bottom:10px;'>"
-                    f"<b>{feature['label']}</b><br>"
-                    f"{feature['value']}"
-                    f"</div>",
+                    f"""
+                    <div style='border:1px solid rgba(128, 128, 128, 0.2);padding:10px;border-radius:8px;"
+                    "background-color:transparent;margin-bottom:10px;'>
+                        <b>{feature['label']}</b><br>
+                        {feature['value']}
+                    </div>
+                    """,
                     unsafe_allow_html=True,
                 )
         
@@ -484,17 +502,19 @@ def show():
                     "value": "❌ No Complaint Link"
                 })
         
-        # Display unstructured features in grid (3 columns)
+        # Display unstructured features in grid (3 columns) - with theme-adaptive card backgrounds
         cols = st.columns(3)
         for i, feature in enumerate(unstructured_features):
             col = cols[i % 3]
             with col:
                 st.markdown(
-                    f"<div style='border:1px solid #ddd;padding:10px;border-radius:8px;"
-                    f"background-color:#F8FAFF;margin-bottom:10px;'>"
-                    f"<b>{feature['label']}</b><br>"
-                    f"{feature['value']}"
-                    f"</div>",
+                    f"""
+                    <div style='border:1px solid rgba(128, 128, 128, 0.2);padding:10px;border-radius:8px;"
+                    "background-color:transparent;margin-bottom:10px;'>
+                        <b>{feature['label']}</b><br>
+                        {feature['value']}
+                    </div>
+                    """,
                     unsafe_allow_html=True,
                 )
     

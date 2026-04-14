@@ -10,8 +10,11 @@ def show():
     def load_fraud_cases():
         """Load fraud cases - only essential columns."""
         try:
+            # ✅ UPDATED: Added explicit ordering to ensure consistent case display
+            # Keeps 1000 limit for sliding window effect (new cases appear as others are validated)
             response = supabase.table("fraud_cases") \
                 .select("case_id, amount_formatted, risk_display, transaction_date, sentiment, fraud_terms, complaint_link, customer_history, actual_fraud") \
+                .order('case_id', desc=False) \
                 .limit(1000) \
                 .execute()
             
@@ -22,6 +25,7 @@ def show():
             if 'case_id' in df.columns:
                 df['case_id'] = df['case_id'].astype(str)
             
+            # Sort by numeric case_id to ensure correct order
             df['case_id_num'] = df['case_id'].str.extract(r'(\d+)$').astype(int)
             df = df.sort_values('case_id_num').drop('case_id_num', axis=1)
             
@@ -174,8 +178,10 @@ def show():
             "cases": load_fraud_cases(),
             "validated_cases": load_validated_cases(),
             "selected_case_id": None,
+            "selected_reval_case_id": None,
             "notes": "",
             "pending_page": 0,
+            "validated_page": 0,
             "confirm_update": None
         }
         for key, value in defaults.items():
@@ -220,6 +226,7 @@ def show():
             st.session_state.validated_cases = load_validated_cases()
             st.toast(f"✅ Case {case_id} revalidated successfully", icon="✅")
             st.session_state.confirm_update = None
+            st.session_state.selected_reval_case_id = None
             st.rerun()
         else:
             st.error(message)
@@ -230,7 +237,9 @@ def show():
         st.session_state.cases = load_fraud_cases()
         st.session_state.validated_cases = load_validated_cases()
         st.session_state.pending_page = 0
+        st.session_state.validated_page = 0
         st.session_state.selected_case_id = None
+        st.session_state.selected_reval_case_id = None
         st.rerun()
 
     # --- Render function ---
@@ -250,7 +259,8 @@ def show():
 
         # --- Header ---
         st.title("🧾 Fraud Case Validation")
-        st.caption(f"📊 Showing {len(cases)} cases from database (ordered by Case ID ascending)")
+        # ✅ UPDATED: Clarified that this is a validation queue with sliding window behavior
+        st.caption(f"📊 Validation queue: {len(cases)} pending cases (new cases appear as others are validated)")
         
         # Refresh button
         col_title, col_refresh = st.columns([6, 1])
@@ -293,8 +303,8 @@ def show():
         
         st.divider()
         
-        # --- Tabs (Now with 3 tabs) ---
-        tab1, tab2, tab3 = st.tabs(["⚠️ Pending Cases", "✅ Validated Cases", "🔄 Re-validate Cases"])
+        # --- Tabs (Now with 2 tabs) ---
+        tab1, tab2 = st.tabs(["⚠️ Pending Cases", "✅ Validated Cases"])
         
         # --- Tab 1: Pending Cases ---
         with tab1:
@@ -331,8 +341,12 @@ def show():
                             badge_color = "#059669"
                             badge_bg = "#D1FAE5"
                         
-                        border_style = "2px solid #3B82F6" if selected_case_id == case["case_id"] else "1px solid #E5E7EB"
-                        bg_color = "#EFF6FF" if selected_case_id == case["case_id"] else "#FFFFFF"
+                        if selected_case_id == case["case_id"]:
+                            border_style = "2px solid #3B82F6"
+                            bg_color = "rgba(59, 130, 246, 0.1)"
+                        else:
+                            border_style = "1px solid rgba(128, 128, 128, 0.2)"
+                            bg_color = "transparent"
                         
                         st.markdown(f"""
                         <div style='border:{border_style}; border-radius:12px; padding:12px; margin-bottom:10px; background:{bg_color};'>
@@ -404,152 +418,214 @@ def show():
             else:
                 st.success("✅ No pending cases!")
         
-        # --- Tab 2: Validated Cases (View Only) ---
+        # --- Tab 2: Validated Cases with Conditional Display ---
         with tab2:
-            st.caption(f"Validated cases: {len(validated_cases_list)}")
-            
-            if validated_cases_list:
-                display_data = [{
-                    "Case ID": v.get('case_id', 'N/A'),
-                    "Valid Type": v.get('valid_type', 'N/A'),
-                    "Validated By": v.get('validated', 'N/A'),
-                    "Date": v.get('timestamp', 'N/A')[:10] if v.get('timestamp') else 'N/A'
-                } for v in validated_cases_list[:200]]
+            # Check if a case is selected for revalidation
+            if st.session_state.selected_reval_case_id:
+                # --- Revalidate Cases Section (shown when a case is selected) ---
+                selected_case = next((v for v in validated_cases_list if v["case_id"] == st.session_state.selected_reval_case_id), None)
                 
-                st.dataframe(pd.DataFrame(display_data), use_container_width=True, hide_index=True)
-                
-                if st.button("📥 Export Full List", use_container_width=True):
-                    export_data = [{
-                        "Case ID": v.get('case_id', 'N/A'),
-                        "Amount": v.get('amount', 'N/A'),
-                        "Risk Score": v.get('risk_score', 'N/A'),
-                        "Valid Type": v.get('valid_type', 'N/A'),
-                        "Validated By": v.get('validated', 'N/A'),
-                        "Feedback Notes": v.get('feedback_notes', 'N/A')
-                    } for v in validated_cases_list]
-                    export_df = pd.DataFrame(export_data)
-                    csv = export_df.to_csv(index=False)
-                    st.download_button("Download CSV", data=csv, file_name=f"validated_cases_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
-            else:
-                st.info("No validated cases yet")
-        
-        # --- Tab 3: Re-validate Cases (No Pagination) ---
-        with tab3:
-            st.caption(f"Revalidate cases that have already been validated (Total: {len(validated_cases_list)} cases)")
-            
-            if validated_cases_list:
-                # Create selectbox with all validated cases (no pagination)
-                revalidation_options = {f"{v['case_id']} - {v.get('amount', 'N/A')} (Current: {v.get('valid_type', 'N/A')})": v['case_id'] 
-                                        for v in validated_cases_list}
-                
-                selected_revalidation = st.selectbox(
-                    "Select a validated case to revalidate:",
-                    options=list(revalidation_options.keys()),
-                    index=None,
-                    placeholder="Select a case...",
-                    key="revalidation_select"
-                )
-                
-                if selected_revalidation:
-                    selected_case_id_reval = revalidation_options[selected_revalidation]
-                    selected_case = next((v for v in validated_cases_list if v["case_id"] == selected_case_id_reval), None)
+                if selected_case:
+                    st.markdown(f"### 🔄 Revalidate Case: `{selected_case['case_id']}`")
                     
-                    if selected_case:
-                        st.markdown("---")
-                        st.markdown(f"### 🔄 Revalidate Case: `{selected_case['case_id']}`")
+                    # Back button to return to table view
+                    if st.button("← Back to Validated Cases", use_container_width=True):
+                        st.session_state.selected_reval_case_id = None
+                        st.rerun()
+                    
+                    st.markdown("---")
+                    
+                    # Display case information
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown(f"**💰 Amount:** {selected_case.get('amount', 'N/A')}")
+                        st.markdown(f"**📅 Transaction Date:** {selected_case.get('transaction_date', 'N/A')}")
+                    with col2:
+                        st.markdown(f"**📊 Risk Score:** {selected_case.get('risk_score', 'N/A')}")
+                        complaint_link = selected_case.get('complaint_link', 'N/A')
+                        if complaint_link and str(complaint_link).strip() and complaint_link != 'N/A':
+                            st.markdown(f"**🔗 Complaint Link:** ✅ Linked")
+                        else:
+                            st.markdown(f"**🔗 Complaint Link:** ❌ No link")
+                    
+                    st.markdown("---")
+                    
+                    # Current validation info
+                    st.markdown("#### Current Validation Information")
+                    col_curr1, col_curr2, col_curr3 = st.columns(3)
+                    with col_curr1:
+                        st.markdown(f"**Validated By:** {selected_case.get('validated', 'N/A')}")
+                    with col_curr2:
+                        st.markdown(f"**Valid Type:** {selected_case.get('valid_type', 'N/A')}")
+                    with col_curr3:
+                        updated_at = selected_case.get('updated_at', selected_case.get('timestamp', 'N/A'))
+                        st.markdown(f"**Last Updated:** {updated_at[:10] if updated_at else 'N/A'}")
+                    
+                    st.markdown(f"**Current Feedback Notes:**")
+                    st.info(selected_case.get('feedback_notes', 'No feedback notes provided.'))
+                    
+                    st.markdown("---")
+                    
+                    # Update form
+                    updated_notes = st.text_area(
+                        "📝 Updated Feedback Notes",
+                        value=selected_case.get('feedback_notes', ''),
+                        placeholder="Add your updated feedback or observations here...",
+                        height=100,
+                        key="revalidation_notes"
+                    )
+                    
+                    st.markdown("**Select New Action:**")
+                    col_update_a, col_update_b, col_update_c = st.columns(3)
+                    
+                    with col_update_a:
+                        if st.button("✅ Revalidate as Confirmed Fraud", use_container_width=True, type="primary", key="reval_confirmed"):
+                            st.session_state.confirm_update = {
+                                "case_id": selected_case['case_id'],
+                                "valid_type": "Confirmed Fraud",
+                                "notes": updated_notes
+                            }
+                            st.rerun()
+                    
+                    with col_update_b:
+                        if st.button("🟢 Revalidate as Legitimate", use_container_width=True, key="reval_legitimate"):
+                            st.session_state.confirm_update = {
+                                "case_id": selected_case['case_id'],
+                                "valid_type": "Legitimate",
+                                "notes": updated_notes
+                            }
+                            st.rerun()
+                    
+                    with col_update_c:
+                        if st.button("🟣 Revalidate as Escalated", use_container_width=True, key="reval_escalated"):
+                            st.session_state.confirm_update = {
+                                "case_id": selected_case['case_id'],
+                                "valid_type": "Escalated",
+                                "notes": updated_notes
+                            }
+                            st.rerun()
+                    
+                    # Confirmation dialog
+                    if st.session_state.confirm_update:
+                        case_id = st.session_state.confirm_update["case_id"]
+                        valid_type = st.session_state.confirm_update["valid_type"]
+                        notes = st.session_state.confirm_update["notes"]
                         
-                        # Display case information
-                        col1, col2 = st.columns(2)
+                        st.warning(f"⚠️ Are you sure you want to revalidate Case {case_id} to '{valid_type}' as {user_email}?")
+                        st.caption("This will update the validation record and cannot be undone.")
+                        
+                        col_confirm1, col_confirm2 = st.columns(2)
+                        with col_confirm1:
+                            if st.button("✅ Yes, Revalidate Case", use_container_width=True):
+                                handle_revalidation(case_id, valid_type, notes)
+                                st.session_state.confirm_update = None
+                                st.rerun()
+                        with col_confirm2:
+                            if st.button("❌ No, Cancel", use_container_width=True):
+                                st.session_state.confirm_update = None
+                                st.session_state.selected_reval_case_id = None
+                                st.rerun()
+                else:
+                    st.info("Selected case not found.")
+                    st.session_state.selected_reval_case_id = None
+                    st.rerun()
+            
+            else:
+                # --- Validated Cases Table (shown when no case is selected) ---
+                st.caption(f"Validated cases: {len(validated_cases_list)}")
+                
+                if validated_cases_list:
+                    # Pagination for validated cases
+                    ROWS_PER_PAGE = 10
+                    total_pages = max(1, (len(validated_cases_list) + ROWS_PER_PAGE - 1) // ROWS_PER_PAGE)
+                    
+                    if st.session_state.validated_page >= total_pages:
+                        st.session_state.validated_page = total_pages - 1
+                    if st.session_state.validated_page < 0:
+                        st.session_state.validated_page = 0
+                    
+                    start_idx = st.session_state.validated_page * ROWS_PER_PAGE
+                    end_idx = min(start_idx + ROWS_PER_PAGE, len(validated_cases_list))
+                    current_validated_cases = validated_cases_list[start_idx:end_idx]
+                    
+                    st.markdown(f"**Page {st.session_state.validated_page + 1} / {total_pages}** (Showing {start_idx + 1}-{end_idx} of {len(validated_cases_list)} cases)")
+                    
+                    # ✅ FIXED: Use ALL validated cases for the selectbox, not just current page
+                    # Sort options for better usability
+                    all_case_ids = sorted([v['case_id'] for v in validated_cases_list])
+                    
+                    selected_revalidation = st.selectbox(
+                        "Select a validated case to revalidate:",
+                        options=all_case_ids,
+                        index=None,
+                        placeholder="Type or select a case...",
+                        key="revalidation_select"
+                    )
+                    
+                    if selected_revalidation:
+                        st.session_state.selected_reval_case_id = selected_revalidation
+                        st.rerun()
+                    
+                    # Display the table with Revalidate button (still paginated for performance)
+                    st.markdown("### Validated Cases")
+                    
+                    # Create DataFrame for display
+                    display_data = []
+                    for case in current_validated_cases:
+                        display_data.append({
+                            "Case ID": case.get('case_id', 'N/A'),
+                            "Valid Type": case.get('valid_type', 'N/A'),
+                            "Validated By": case.get('validated', 'N/A'),
+                            "Date": case.get('timestamp', 'N/A')[:10] if case.get('timestamp') else 'N/A',
+                            "Action": "Revalidate"
+                        })
+                    
+                    df_display = pd.DataFrame(display_data)
+                    
+                    # Display the table
+                    for idx, row in df_display.iterrows():
+                        col1, col2, col3, col4, col5 = st.columns([2, 1.5, 1.5, 1.5, 1])
                         with col1:
-                            st.markdown(f"**💰 Amount:** {selected_case.get('amount', 'N/A')}")
-                            st.markdown(f"**📅 Transaction Date:** {selected_case.get('transaction_date', 'N/A')}")
+                            st.write(row['Case ID'])
                         with col2:
-                            st.markdown(f"**📊 Risk Score:** {selected_case.get('risk_score', 'N/A')}")
-                            complaint_link = selected_case.get('complaint_link', 'N/A')
-                            if complaint_link and str(complaint_link).strip() and complaint_link != 'N/A':
-                                st.markdown(f"**🔗 Complaint Link:** ✅ Linked")
-                            else:
-                                st.markdown(f"**🔗 Complaint Link:** ❌ No link")
-                        
-                        st.markdown("---")
-                        
-                        # Current validation info
-                        st.markdown("#### Current Validation Information")
-                        col_curr1, col_curr2, col_curr3 = st.columns(3)
-                        with col_curr1:
-                            st.markdown(f"**Validated By:** {selected_case.get('validated', 'N/A')}")
-                        with col_curr2:
-                            st.markdown(f"**Valid Type:** {selected_case.get('valid_type', 'N/A')}")
-                        with col_curr3:
-                            updated_at = selected_case.get('updated_at', selected_case.get('timestamp', 'N/A'))
-                            st.markdown(f"**Last Updated:** {updated_at[:10] if updated_at else 'N/A'}")
-                        
-                        st.markdown(f"**Current Feedback Notes:**")
-                        st.info(selected_case.get('feedback_notes', 'No feedback notes provided.'))
-                        
-                        st.markdown("---")
-                        
-                        # Update form
-                        st.markdown("#### Update Validation Decision")
-                        
-                        updated_notes = st.text_area(
-                            "📝 Updated Feedback Notes",
-                            value=selected_case.get('feedback_notes', ''),
-                            placeholder="Add your updated feedback or observations here...",
-                            height=100,
-                            key="revalidation_notes"
-                        )
-                        
-                        st.markdown("**Select New Action:**")
-                        col_update_a, col_update_b, col_update_c = st.columns(3)
-                        
-                        with col_update_a:
-                            if st.button("✅ Revalidate as Confirmed Fraud", use_container_width=True, type="primary", key="reval_confirmed"):
-                                st.session_state.confirm_update = {
-                                    "case_id": selected_case['case_id'],
-                                    "valid_type": "Confirmed Fraud",
-                                    "notes": updated_notes
-                                }
+                            st.write(row['Valid Type'])
+                        with col3:
+                            st.write(row['Validated By'])
+                        with col4:
+                            st.write(row['Date'])
+                        with col5:
+                            if st.button(f"Revalidate", key=f"revalidate_{row['Case ID']}_{idx}", use_container_width=True):
+                                st.session_state.selected_reval_case_id = row['Case ID']
                                 st.rerun()
-                        
-                        with col_update_b:
-                            if st.button("🟢 Revalidate as Legitimate", use_container_width=True, key="reval_legitimate"):
-                                st.session_state.confirm_update = {
-                                    "case_id": selected_case['case_id'],
-                                    "valid_type": "Legitimate",
-                                    "notes": updated_notes
-                                }
-                                st.rerun()
-                        
-                        with col_update_c:
-                            if st.button("🟣 Revalidate as Escalated", use_container_width=True, key="reval_escalated"):
-                                st.session_state.confirm_update = {
-                                    "case_id": selected_case['case_id'],
-                                    "valid_type": "Escalated",
-                                    "notes": updated_notes
-                                }
-                                st.rerun()
-                
-                # Confirmation dialog
-                if st.session_state.confirm_update:
-                    case_id = st.session_state.confirm_update["case_id"]
-                    valid_type = st.session_state.confirm_update["valid_type"]
-                    notes = st.session_state.confirm_update["notes"]
+                        st.divider()
                     
-                    st.warning(f"⚠️ Are you sure you want to revalidate Case {case_id} to '{valid_type}' as {user_email}?")
-                    st.caption("This will update the validation record and cannot be undone.")
+                    # Pagination controls
+                    if total_pages > 1:
+                        col_prev, col_next = st.columns(2)
+                        with col_prev:
+                            if st.button("◀ Previous", disabled=(st.session_state.validated_page == 0), use_container_width=True, key="validated_prev"):
+                                st.session_state.validated_page -= 1
+                                st.rerun()
+                        with col_next:
+                            if st.button("Next ▶", disabled=(st.session_state.validated_page >= total_pages - 1), use_container_width=True, key="validated_next"):
+                                st.session_state.validated_page += 1
+                                st.rerun()
                     
-                    col_confirm1, col_confirm2 = st.columns(2)
-                    with col_confirm1:
-                        if st.button("✅ Yes, Revalidate Case", use_container_width=True):
-                            handle_revalidation(case_id, valid_type, notes)
-                            st.session_state.confirm_update = None
-                            st.rerun()
-                    with col_confirm2:
-                        if st.button("❌ No, Cancel", use_container_width=True):
-                            st.session_state.confirm_update = None
-                            st.rerun()
-            else:
-                st.info("📭 No validated cases available for revalidation yet.")
+                    # Export button
+                    st.markdown("---")
+                    if st.button("📥 Export Full List", use_container_width=True):
+                        export_data = [{
+                            "Case ID": v.get('case_id', 'N/A'),
+                            "Amount": v.get('amount', 'N/A'),
+                            "Risk Score": v.get('risk_score', 'N/A'),
+                            "Valid Type": v.get('valid_type', 'N/A'),
+                            "Validated By": v.get('validated', 'N/A'),
+                            "Feedback Notes": v.get('feedback_notes', 'N/A')
+                        } for v in validated_cases_list]
+                        export_df = pd.DataFrame(export_data)
+                        csv = export_df.to_csv(index=False)
+                        st.download_button("Download CSV", data=csv, file_name=f"validated_cases_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+                else:
+                    st.info("No validated cases yet")
     
     render()

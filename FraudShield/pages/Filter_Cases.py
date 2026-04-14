@@ -136,15 +136,19 @@ def show():
         st.session_state.date_filter_value = "All"
 
     # --------------------------
-    # LOAD DATA FROM SUPABASE (LIMITED TO 1000 ROWS)
+    # LOAD DATA FROM SUPABASE (FIXED: Ordered and includes case 4000)
     # --------------------------
     @st.cache_data(ttl=300, max_entries=1)
     def load_fraud_cases():
-        """Load first 1000 fraud cases from Supabase."""
+        """Load fraud cases from Supabase with consistent ordering starting from case 4000."""
         try:
+            # ✅ FIXED: Order by case_id ascending and use gte to ensure case 4000+ are included
+            # This ensures we always get cases starting from 4000 in ascending order
             response = supabase.table("fraud_cases") \
                 .select("*") \
-                .limit(1000) \
+                .gte('case_id', 'FR-2025-4000') \
+                .order('case_id', desc=False) \
+                .limit(2000) \
                 .execute()
             
             if response.data:
@@ -159,6 +163,10 @@ def show():
                 df['risk_score_numeric'] = df['risk_display'].apply(extract_risk_score)
                 df['amount_numeric'] = df['amount_formatted'].apply(extract_amount)
                 df['risk_level'] = df['risk_display'].apply(get_risk_level)
+                
+                # Sort by numeric case_id to ensure correct order
+                df['case_id_num'] = df['case_id'].str.extract(r'(\d+)$').astype(int)
+                df = df.sort_values('case_id_num').drop('case_id_num', axis=1)
                 
                 return df, total_loaded, None
             else:
@@ -192,7 +200,7 @@ def show():
     # --------------------------
     # LOAD DATA WITH PROGRESS INDICATOR
     # --------------------------
-    with st.spinner("Loading fraud case data from database (first 1000 records)..."):
+    with st.spinner("Loading fraud case data from database..."):
         df, total_loaded, error = load_fraud_cases()
     
     if st.session_state.original_df is None:
@@ -207,7 +215,7 @@ def show():
             st.info("Using sample data for demonstration.")
     
     if total_loaded > 0 and not st.session_state.data_loaded:
-        st.success(f"✅ Loaded {total_loaded:,} records from database (limited to first 1000)")
+        st.success(f"✅ Loaded {total_loaded:,} records from database")
         st.session_state.data_loaded = True
 
     # --------------------------
@@ -504,7 +512,7 @@ def show():
     # DATA MANAGEMENT
     # --------------------------
     with st.expander("⚙️ Data Information"):
-        st.write(f"**Total Cases:** {len(st.session_state.original_df):,} (limited to first 1000 records)")
+        st.write(f"**Total Cases:** {len(st.session_state.original_df):,}")
         if 'date_str' in st.session_state.original_df.columns:
             st.write(f"**Date Range:** {st.session_state.original_df['date_str'].min()} to {st.session_state.original_df['date_str'].max()}")
         if 'risk_level' in st.session_state.original_df.columns:

@@ -2,12 +2,12 @@ import streamlit as st
 import plotly.express as px
 import pandas as pd
 from FraudShield.utils.supabase_client import supabase
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import re
 from io import BytesIO
-from reportlab.lib.pagesizes import letter, landscape
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.lib.pagesizes import letter, landscape, A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import inch
@@ -17,163 +17,323 @@ def render_reports():
     st.caption("Comprehensive fraud analytics with explainability insights")
     st.divider()
 
-    # --- PDF Generation Function ---
+    # --- ENHANCED PDF Generation Function ---
     def generate_pdf_report():
-        """Generate a PDF report with all charts and data."""
+        """Generate an enhanced PDF report with all analytics and insights."""
         buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
         styles = getSampleStyleSheet()
         elements = []
         
-        # Title
+        # Custom styles
         title_style = ParagraphStyle(
             'CustomTitle',
             parent=styles['Heading1'],
             fontSize=24,
             textColor=colors.HexColor('#1f2937'),
-            spaceAfter=30
+            spaceAfter=20
         )
-        elements.append(Paragraph("Fraud Detection Report", title_style))
-        elements.append(Spacer(1, 0.2 * inch))
-        
-        # Date and time
-        date_style = ParagraphStyle(
-            'DateStyle',
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#3B82F6'),
+            spaceAfter=12,
+            spaceBefore=10
+        )
+        subheading_style = ParagraphStyle(
+            'CustomSubheading',
+            parent=styles['Heading3'],
+            fontSize=13,
+            textColor=colors.HexColor('#4B5563'),
+            spaceAfter=8
+        )
+        normal_style = ParagraphStyle(
+            'CustomNormal',
             parent=styles['Normal'],
             fontSize=10,
-            textColor=colors.gray
+            textColor=colors.HexColor('#374151'),
+            spaceAfter=6
         )
-        elements.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", date_style))
+        insight_style = ParagraphStyle(
+            'InsightStyle',
+            parent=styles['Normal'],
+            fontSize=9,
+            textColor=colors.HexColor('#6B7280'),
+            leftIndent=20,
+            spaceAfter=4
+        )
+        
+        # ============================================================
+        # REPORT HEADER
+        # ============================================================
+        elements.append(Paragraph("FraudbAI Intelligence Report", title_style))
+        elements.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))
+        elements.append(Paragraph(f"Reporting Period: {period_value}", normal_style))
+        elements.append(Paragraph(f"Total Fraud Cases in Database: {total_cases_in_db:,}", normal_style))
+        elements.append(Paragraph(f"Cases Analyzed in Report: {len(alert_df):,} (starting from Case 4000)", normal_style))
         elements.append(Spacer(1, 0.3 * inch))
         
-        # KPI Summary
-        elements.append(Paragraph("Key Performance Indicators", styles['Heading2']))
-        elements.append(Spacer(1, 0.1 * inch))
+        # ============================================================
+        # EXECUTIVE SUMMARY
+        # ============================================================
+        elements.append(Paragraph("Executive Summary", heading_style))
         
-        # Create KPI table
-        kpi_data = [["Metric", "Value", "Change"]]
+        # Calculate executive summary metrics
+        if not alert_df.empty:
+            amounts = []
+            for _, row in alert_df.iterrows():
+                amount_str = str(row.get('amount_formatted', 'RM 0'))
+                amount_num = re.sub(r'[^\d.]', '', amount_str.replace('RM', '').replace(',', ''))
+                try:
+                    amounts.append(float(amount_num))
+                except:
+                    amounts.append(0)
+            
+            total_amount = sum(amounts)
+            avg_amount = total_amount / len(amounts) if amounts else 0
+            max_amount = max(amounts) if amounts else 0
+            min_amount = min(amounts) if amounts else 0
+            
+            risk_scores = []
+            for _, row in alert_df.iterrows():
+                score = extract_risk_score(row.get('risk_display', 'N/A'))
+                risk_scores.append(score)
+            
+            avg_risk_score = sum(risk_scores) / len(risk_scores) if risk_scores else 0
+            
+            confirmed_fraud = validation_data[validation_data['Outcome'] == 'Confirmed Fraud']['Cases'].values[0] if not validation_data.empty else 98
+            legitimate = validation_data[validation_data['Outcome'] == 'Rejected (Legitimate)']['Cases'].values[0] if not validation_data.empty else 127
+        else:
+            total_amount = avg_amount = max_amount = min_amount = avg_risk_score = 0
+            confirmed_fraud = 98
+            legitimate = 127
+        
+        exec_data = [
+            ["Metric", "Value", "Key Insight"],
+            ["Total Transaction Volume", f"RM {total_amount:,.2f}", "Total value of analyzed transactions"],
+            ["Average Transaction", f"RM {avg_amount:,.2f}", "Typical fraud target size"],
+            ["Largest Transaction", f"RM {max_amount:,.2f}", "Highest value case flagged"],
+            ["Average Risk Score", f"{avg_risk_score*100:.1f}%", "Mean risk across all cases"],
+            ["High Risk Cases", f"{high_risk_count} ({high_risk_count/len(alert_df)*100:.1f}%)" if not alert_df.empty else "0", "Require immediate attention"],
+            ["Medium Risk Cases", f"{medium_risk_count} ({medium_risk_count/len(alert_df)*100:.1f}%)" if not alert_df.empty else "0", "Require monitoring"],
+            ["Low Risk Cases", f"{low_risk_count} ({low_risk_count/len(alert_df)*100:.1f}%)" if not alert_df.empty else "0", "Lower priority"],
+            ["Confirmed Fraud", f"{confirmed_fraud}", "Validated as actual fraud"],
+            ["Legitimate Cases", f"{legitimate}", "Validated as legitimate"],
+            ["Fraud Detection Rate", f"{(confirmed_fraud/(confirmed_fraud+legitimate)*100):.1f}%" if (confirmed_fraud+legitimate) > 0 else "0%", "Cases confirmed as fraud"],
+            ["Est. Amount Saved", f"RM {total_amount * (confirmed_fraud/(confirmed_fraud+legitimate+escalated)):,.2f}" if (confirmed_fraud+legitimate+escalated) > 0 else "RM 0", "Estimated fraud prevented"]
+        ]
+        
+        exec_table = Table(exec_data, colWidths=[2.5*inch, 1.5*inch, 2.5*inch])
+        exec_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F3F4F6')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D1D5DB')),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        elements.append(exec_table)
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # Key Findings
+        elements.append(Paragraph("Key Findings", subheading_style))
+        elements.append(Paragraph(f"• {high_risk_count} high-risk cases require immediate review", insight_style))
+        elements.append(Paragraph(f"• Fraud detection rate is {(confirmed_fraud/(confirmed_fraud+legitimate)*100):.1f}%", insight_style))
+        elements.append(Paragraph(f"• Average transaction amount of RM {avg_amount:,.2f} indicates typical fraud target", insight_style))
+        elements.append(Spacer(1, 0.2 * inch))
+        
+        # ============================================================
+        # KPI SUMMARY
+        # ============================================================
+        elements.append(Paragraph("Key Performance Indicators", heading_style))
+        
+        kpi_data = [["Metric", "Value", "Change", "Status"]]
         for stat in stats:
-            kpi_data.append([stat["title"], stat["value"], f"{stat['change']}%"])
+            status = "✅ Healthy" if stat["change"] > 0 else "⚠️ Monitor" if stat["change"] < -5 else "➖ Stable"
+            kpi_data.append([stat["title"], stat["value"], f"{stat['change']}%", status])
         
-        kpi_table = Table(kpi_data)
+        kpi_table = Table(kpi_data, colWidths=[2*inch, 1.2*inch, 1*inch, 1.2*inch])
         kpi_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F3F4F6')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D1D5DB')),
             ('FONTSIZE', (0, 1), (-1, -1), 9),
         ]))
         elements.append(kpi_table)
         elements.append(Spacer(1, 0.3 * inch))
         
-        # Fraud Trends
-        elements.append(Paragraph("Fraud Detection Trends", styles['Heading2']))
+        # ============================================================
+        # FRAUD DETECTION TRENDS
+        # ============================================================
+        elements.append(Paragraph("Fraud Detection Trends", heading_style))
+        elements.append(Paragraph("Monthly analysis of fraud detection and prevention activities", normal_style))
         elements.append(Spacer(1, 0.1 * inch))
         
-        # Create fraud trend table
-        trend_data = [["Month", "Detected", "Prevented", "Saved (MYR)"]]
+        trend_data = [["Month", "Detected", "Prevented", "Saved (MYR)", "Prevention Rate"]]
         for _, row in fraud_trend.iterrows():
-            trend_data.append([row["Month"], row["Detected"], row["Prevented"], f"RM {row['Saved (MYR)']:,}"])
+            prevention_rate = (row["Prevented"] / row["Detected"] * 100) if row["Detected"] > 0 else 0
+            trend_data.append([
+                row["Month"], 
+                row["Detected"], 
+                row["Prevented"], 
+                f"RM {row['Saved (MYR)']:,}",
+                f"{prevention_rate:.1f}%"
+            ])
         
-        trend_table = Table(trend_data)
+        trend_table = Table(trend_data, colWidths=[0.8*inch, 1*inch, 1*inch, 1.3*inch, 1.2*inch])
         trend_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F3F4F6')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D1D5DB')),
             ('FONTSIZE', (0, 1), (-1, -1), 9),
         ]))
         elements.append(trend_table)
+        
+        avg_prevention = (fraud_trend['Prevented'].sum() / fraud_trend['Detected'].sum() * 100)
+        elements.append(Paragraph(f"Insight: Prevention rate averaged {avg_prevention:.1f}% over the period", insight_style))
         elements.append(Spacer(1, 0.3 * inch))
         
-        # Geographic Distribution
-        elements.append(Paragraph("Geographic Fraud Distribution", styles['Heading2']))
-        elements.append(Spacer(1, 0.1 * inch))
+        # ============================================================
+        # GEOGRAPHIC DISTRIBUTION
+        # ============================================================
+        elements.append(Paragraph("Geographic Fraud Distribution", heading_style))
         
-        geo_data_list = [["Region", "Cases"]]
-        for _, row in geo_data.iterrows():
-            geo_data_list.append([row["Region"], row["Cases"]])
+        total_geo_cases = geo_data["Cases"].sum()
+        geo_export_data = [["Region", "Cases", "Percentage", "Risk Level"]]
+        risk_levels = ["High", "Medium", "Medium", "Low", "Low"]
+        for i, (_, row) in enumerate(geo_data.iterrows()):
+            percentage = (row["Cases"] / total_geo_cases * 100)
+            geo_export_data.append([
+                row["Region"], 
+                row["Cases"], 
+                f"{percentage:.1f}%",
+                risk_levels[i] if i < len(risk_levels) else "Medium"
+            ])
         
-        geo_table = Table(geo_data_list)
+        geo_table = Table(geo_export_data, colWidths=[1.5*inch, 1*inch, 1.2*inch, 1*inch])
         geo_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F3F4F6')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D1D5DB')),
             ('FONTSIZE', (0, 1), (-1, -1), 9),
         ]))
         elements.append(geo_table)
+        
+        kl_pct = (geo_data[geo_data['Region']=='Kuala Lumpur']['Cases'].values[0]/total_geo_cases*100) if total_geo_cases > 0 else 0
+        elements.append(Paragraph(f"Insight: Kuala Lumpur accounts for {kl_pct:.1f}% of all fraud cases", insight_style))
         elements.append(Spacer(1, 0.3 * inch))
         
-        # Validation Summary
-        elements.append(Paragraph("Validation Summary", styles['Heading2']))
-        elements.append(Spacer(1, 0.1 * inch))
+        # ============================================================
+        # VALIDATION SUMMARY
+        # ============================================================
+        elements.append(Paragraph("Validation Summary", heading_style))
         
-        validation_data_list = [["Outcome", "Cases", "Percentage"]]
-        total_validation_cases = validation_data["Cases"].sum()
-        for _, row in validation_data.iterrows():
-            percentage = (row["Cases"] / total_validation_cases) * 100
-            validation_data_list.append([row["Outcome"], row["Cases"], f"{percentage:.1f}%"])
+        validation_export_data = [["Outcome", "Cases", "Percentage", "Action Required"]]
+        total_validated = validation_data["Cases"].sum()
+        actions = ["Investigate and report", "No action needed", "Escalate to senior analyst", "Complete validation"]
+        for i, (_, row) in enumerate(validation_data.iterrows()):
+            percentage = (row["Cases"] / total_validated * 100)
+            validation_export_data.append([
+                row["Outcome"], 
+                row["Cases"], 
+                f"{percentage:.1f}%",
+                actions[i] if i < len(actions) else "Review"
+            ])
         
-        validation_table = Table(validation_data_list)
+        validation_table = Table(validation_export_data, colWidths=[1.8*inch, 1*inch, 1.2*inch, 1.8*inch])
         validation_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F3F4F6')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D1D5DB')),
             ('FONTSIZE', (0, 1), (-1, -1), 9),
         ]))
         elements.append(validation_table)
         elements.append(Spacer(1, 0.3 * inch))
         
-        # SHAP Feature Importance
-        elements.append(Paragraph("SHAP Feature Importance", styles['Heading2']))
+        # ============================================================
+        # SHAP FEATURE IMPORTANCE
+        # ============================================================
+        elements.append(Paragraph("SHAP Feature Importance Analysis", heading_style))
+        elements.append(Paragraph("Model explainability - factors influencing fraud predictions", normal_style))
         elements.append(Spacer(1, 0.1 * inch))
         
-        shap_data_list = [["Feature", "SHAP Value"]]
-        for _, row in shap_data.iterrows():
-            shap_data_list.append([row["Feature"], f"{row['SHAP Value']:.3f}"])
+        shap_export_data = [["Feature", "SHAP Value", "Impact", "Interpretation"]]
+        interpretations = [
+            "Large transactions significantly increase fraud risk",
+            "Transactions outside business hours are highly suspicious",
+            "Rapid location changes strongly indicate potential fraud",
+            "Urgency keywords correlate with fraudulent activity",
+            "Established customers show lower fraud risk (negative impact)"
+        ]
+        for i, (_, row) in enumerate(shap_data.iterrows()):
+            impact = "Strong Positive" if row["SHAP Value"] > 0.3 else "Moderate Positive" if row["SHAP Value"] > 0.1 else "Negative"
+            shap_export_data.append([
+                row["Feature"], 
+                f"{row['SHAP Value']:.3f}", 
+                impact,
+                interpretations[i] if i < len(interpretations) else "N/A"
+            ])
         
-        shap_table = Table(shap_data_list)
+        shap_table = Table(shap_export_data, colWidths=[2*inch, 1*inch, 1.2*inch, 2.5*inch])
         shap_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F3F4F6')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D1D5DB')),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ]))
         elements.append(shap_table)
         elements.append(Spacer(1, 0.3 * inch))
         
-        # NLP Keywords
-        elements.append(Paragraph("NLP Keyword Analysis", styles['Heading2']))
+        # ============================================================
+        # NLP KEYWORD ANALYSIS
+        # ============================================================
+        elements.append(Paragraph("NLP Keyword Intelligence", heading_style))
+        elements.append(Paragraph("Keywords strongly associated with fraudulent transactions", normal_style))
         elements.append(Spacer(1, 0.1 * inch))
         
-        nlp_data_list = [["Keyword", "Frequency", "Risk Increase (%)", "SHAP Contribution"]]
+        nlp_export_data = [["Keyword", "Frequency", "Risk Increase", "SHAP Contrib.", "Priority"]]
         for _, row in nlp_keywords.iterrows():
-            nlp_data_list.append([row["Keyword"], row["Frequency"], f"{row['Risk Increase (%)']}%", f"{row['SHAP Contribution']:.2f}"])
+            priority = "🔴 Critical" if row["Risk Increase (%)"] > 20 else "🟠 High" if row["Risk Increase (%)"] > 15 else "🟡 Medium"
+            nlp_export_data.append([
+                row["Keyword"], 
+                row["Frequency"], 
+                f"{row['Risk Increase (%)']}%",
+                f"{row['SHAP Contribution']:.2f}",
+                priority
+            ])
         
-        nlp_table = Table(nlp_data_list)
+        nlp_table = Table(nlp_export_data, colWidths=[1.5*inch, 1*inch, 1.2*inch, 1.2*inch, 1.2*inch])
         nlp_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -181,11 +341,57 @@ def render_reports():
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 9),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F3F4F6')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D1D5DB')),
             ('FONTSIZE', (0, 1), (-1, -1), 8),
         ]))
         elements.append(nlp_table)
+        elements.append(Paragraph("Key Finding: 'urgent transfer' and 'verify account' are the strongest fraud indicators", insight_style))
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # ============================================================
+        # RECOMMENDATIONS AND ACTION ITEMS
+        # ============================================================
+        elements.append(PageBreak())
+        elements.append(Paragraph("Recommendations & Action Items", heading_style))
+        elements.append(Spacer(1, 0.1 * inch))
+        
+        rec_data = [["Priority", "Category", "Recommendation", "Expected Impact", "Timeline"]]
+        recommendations = [
+            ["High", "Risk Monitoring", f"Immediately review {high_risk_count} high-risk cases", "Prevent potential fraud losses", "Immediate"],
+            ["High", "Geographic", "Implement additional verification for Kuala Lumpur region", "Reduce regional fraud by 15-20%", "1 Week"],
+            ["Medium", "Validation", f"Escalate {escalated} pending cases for senior review", "Improve validation accuracy", "48 Hours"],
+            ["Medium", "NLP", "Add 'urgent transfer' and 'verify account' to detection rules", "Increase detection rate by 5-10%", "2 Weeks"],
+            ["Low", "Process", "Schedule weekly fraud pattern review meetings", "Continuous improvement", "Ongoing"]
+        ]
+        
+        for rec in recommendations:
+            rec_data.append(rec)
+        
+        rec_table = Table(rec_data, colWidths=[0.8*inch, 1.2*inch, 2*inch, 1.8*inch, 0.9*inch])
+        rec_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#EF4444')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#FEF2F2')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#FCA5A5')),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        elements.append(rec_table)
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # ============================================================
+        # REPORT FOOTER
+        # ============================================================
+        elements.append(Paragraph("---", normal_style))
+        elements.append(Paragraph("Report Generated by: FraudShield AI Detection System", normal_style))
+        elements.append(Paragraph("Contact: fraud-team@fraudshield.com", normal_style))
+        elements.append(Paragraph(f"Next Report Scheduled: {(datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')}", normal_style))
+        elements.append(Paragraph("CONFIDENTIAL - For Internal Use Only", insight_style))
         
         # Build PDF
         doc.build(elements)
@@ -198,31 +404,29 @@ def render_reports():
     if 'notification_shown_for_version' not in st.session_state:
         st.session_state.notification_shown_for_version = None
 
-    # --- Define the display limit - CHANGE THIS NUMBER TO TEST ---
-    # Change this from 1000 to 1001 to see the notification
-    CURRENT_LIMIT = 1000  # <-- CHANGE THIS TO 1001 TO TEST
+    # --- Define the display limit ---
+    CURRENT_LIMIT = 1000
 
     # Check if the limit has been increased (version tracking)
     if CURRENT_LIMIT > st.session_state.limit_version:
-        # Show toast notification
         new_cases = CURRENT_LIMIT - st.session_state.limit_version
         st.toast(f"🔔 {new_cases} new case(s) has been updated into View Alert!", icon="📊")
-        # Update the version to prevent showing again
         st.session_state.limit_version = CURRENT_LIMIT
 
     # --- Load Data for View Alert from fraud_cases table ---
     @st.cache_data(ttl=60)
     def load_alert_data(limit):
-        """Load fraud cases data for View Alert tab."""
+        """Load fraud cases data for View Alert tab starting from case 4000."""
         try:
             response = supabase.table("fraud_cases") \
                 .select("case_id, amount_formatted, risk_display, transaction_date, created_at") \
+                .gte('case_id', 'FR-2025-4000') \
+                .order('case_id', desc=False) \
                 .limit(limit) \
                 .execute()
             
             if response.data:
                 df = pd.DataFrame(response.data)
-                # Sort by case_id numerically to show smaller IDs first
                 if 'case_id' in df.columns:
                     df['case_id_num'] = df['case_id'].str.extract(r'(\d+)$').astype(int)
                     df = df.sort_values('case_id_num').drop('case_id_num', axis=1)
@@ -241,13 +445,11 @@ def render_reports():
             
             risk_str = str(risk_display)
             
-            # Try to find percentage format (e.g., "90%")
             if '%' in risk_str:
                 percentage_match = re.search(r'(\d+)%', risk_str)
                 if percentage_match:
                     return int(percentage_match.group(1)) / 100
             
-            # Try to find decimal in parentheses (e.g., "High (0.90)")
             if '(' in risk_str and ')' in risk_str:
                 decimal_str = risk_str.split('(')[1].split(')')[0]
                 return float(decimal_str)
@@ -263,11 +465,8 @@ def render_reports():
                 return 'Unknown'
             
             risk_str = str(risk_display).lower()
-            
-            # First try to extract numeric score
             risk_score = extract_risk_score(risk_display)
             
-            # Determine risk level based on numeric score
             if risk_score >= 0.70:
                 return 'High'
             elif risk_score >= 0.40:
@@ -275,7 +474,6 @@ def render_reports():
             elif risk_score > 0:
                 return 'Low'
             
-            # Fallback to text matching
             if 'high' in risk_str:
                 return 'High'
             elif 'medium' in risk_str:
@@ -340,7 +538,7 @@ def render_reports():
     
     total_cases_in_db = get_total_case_count()
 
-    # --- KPI Data (moved inside Fraud Trends tab) ---
+    # --- KPI Data ---
     stats = [
         {"title": "Total Transactions", "value": "52,340", "change": 15.3},
         {"title": "Flagged Cases", "value": 142, "change": -8.2},
@@ -348,6 +546,18 @@ def render_reports():
         {"title": "Amount Saved (RM)", "value": "932K", "change": 15.0},
         {"title": "Threats Detected", "value": 337, "change": 8.0},
     ]
+
+    # --- Calculate risk counts for later use ---
+    if not alert_df.empty:
+        high_risk_count = len([a for a in alert_df.to_dict('records') if get_risk_level(a.get('risk_display', 'N/A')) == 'High'])
+        medium_risk_count = len([a for a in alert_df.to_dict('records') if get_risk_level(a.get('risk_display', 'N/A')) == 'Medium'])
+        low_risk_count = len([a for a in alert_df.to_dict('records') if get_risk_level(a.get('risk_display', 'N/A')) == 'Low'])
+        escalated = validation_data[validation_data['Outcome'] == 'Escalated']['Cases'].values[0] if not validation_data.empty else 23
+    else:
+        high_risk_count = 0
+        medium_risk_count = 0
+        low_risk_count = 0
+        escalated = 23
 
     # --- Tabs ---
     st.markdown(
@@ -378,7 +588,6 @@ def render_reports():
         st.subheader("Alert Queue")
         
         if not alert_df.empty:
-            # Process the data to create the required columns
             alert_data = []
             for _, row in alert_df.iterrows():
                 risk_score = extract_risk_score(row.get('risk_display', 'N/A'))
@@ -395,16 +604,8 @@ def render_reports():
                 })
             
             df_alerts = pd.DataFrame(alert_data)
-            
-            # Calculate counts
             total_alerts = len(alert_data)
-            high_risk_count = len([a for a in alert_data if a['risk_level'] == 'High'])
-            medium_risk_count = len([a for a in alert_data if a['risk_level'] == 'Medium'])
-            low_risk_count = len([a for a in alert_data if a['risk_level'] == 'Low'])
-            unknown_risk_count = len([a for a in alert_data if a['risk_level'] == 'Unknown'])
             
-            # Alert Summary
-            # Display risk breakdown in columns
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("🔴 High Risk", high_risk_count, delta=f"{high_risk_count/total_alerts*100:.1f}%" if total_alerts > 0 else "0%")
@@ -417,25 +618,21 @@ def render_reports():
             
             st.divider()
             
-             # Show total cases info with refresh button inline
             if total_cases_in_db > CURRENT_LIMIT:
-                # Create two columns for the info message and refresh button
                 info_col, refresh_col = st.columns([5, 1])
                 with info_col:
-                    st.info(f"ℹ️ Showing first {CURRENT_LIMIT} cases. Total cases in database: {total_cases_in_db:,}. New cases beyond the first {CURRENT_LIMIT} will appear here as they move into the top {CURRENT_LIMIT}.")
+                    st.info(f"ℹ️ Showing first {CURRENT_LIMIT} cases starting from Case 4000 (ordered by Case ID ascending). Total cases in database: {total_cases_in_db:,}.")
                 with refresh_col:
                     if st.button("🔄 Refresh", key="refresh_alerts_btn", use_container_width=True):
                         st.cache_data.clear()
                         st.rerun()
             else:
-                # Show just the refresh button if no info message
                 col1, col2, col3 = st.columns([4, 1, 4])
                 with col2:
                     if st.button("🔄 Refresh Alerts", key="refresh_alerts_btn_solo", use_container_width=True):
                         st.cache_data.clear()
                         st.rerun()
 
-            # Display the table
             st.dataframe(
                 df_alerts,
                 use_container_width=True,
@@ -450,7 +647,6 @@ def render_reports():
                 }
             )
             
-            # Export buttons for alerts
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
                 if st.button("📥 Export Alerts to CSV", use_container_width=True, key="export_alerts_btn"):
@@ -465,12 +661,10 @@ def render_reports():
         else:
             st.info("📭 No alert data available at this time.")
 
-    # ---- Tab 2: Fraud Trends (with KPI metrics now inside) ----
+    # ---- Tab 2: Fraud Trends ----
     with tab2:
-        # Display KPI metrics at the top of the Fraud Trends tab
         st.subheader("Key Performance Indicators")
         
-        # Create 5 columns for the 5 metrics
         cols = st.columns(5)
         for col, stat in zip(cols, stats):
             color_mode = "inverse" if stat["title"] == "Threats Detected" else "normal"
@@ -484,12 +678,10 @@ def render_reports():
         
         st.divider()
         
-        # Original Fraud Trends content
         col1, _, col2 = st.columns([1, 0.05, 1])
         with col1:
             st.subheader("Fraud Detection Trends")
             st.caption("Monthly fraud detection and prevention statistics")
-
             fig = px.line(
                 fraud_trend, x="Month", y=["Detected", "Prevented"],
                 markers=True, title="Detected vs Prevented Fraud Cases",
@@ -567,66 +759,35 @@ def render_reports():
         st.dataframe(nlp_keywords, use_container_width=True)
         st.warning("🧠 These keywords often indicate potential fraud risk.")
     
-    # ---- Footer Controls (moved to bottom) ----
+        # ---- Footer Controls ----
     st.divider()
     
-    # Period selector
     period_value = st.selectbox("Select Period", ["1 month", "3 months", "6 months", "1 year"], index=2, key="period_select_bottom")
-    
-    # Display the current period message
     st.write(f"Currently viewing **{period_value}** trend.")
     
-    # Export buttons (CSV and PDF)
+    # Export button (PDF only) - Single version with user email in filename
     col1, col2, col3 = st.columns([1, 1, 1])
-    with col1:
-        if st.button("📊 Export Report as CSV", use_container_width=True, key="export_csv_btn"):
-            # Create a comprehensive CSV with all data
-            csv_data = []
-            
-            # Add KPI data
-            for stat in stats:
-                csv_data.append({"Section": "KPIs", "Metric": stat["title"], "Value": stat["value"], "Change": f"{stat['change']}%"})
-            
-            # Add fraud trend data
-            for _, row in fraud_trend.iterrows():
-                csv_data.append({"Section": "Fraud Trends", "Metric": f"{row['Month']} - Detected", "Value": row["Detected"], "Change": ""})
-                csv_data.append({"Section": "Fraud Trends", "Metric": f"{row['Month']} - Prevented", "Value": row["Prevented"], "Change": ""})
-                csv_data.append({"Section": "Fraud Trends", "Metric": f"{row['Month']} - Saved", "Value": f"RM {row['Saved (MYR)']:,}", "Change": ""})
-            
-            # Add geographic data
-            for _, row in geo_data.iterrows():
-                csv_data.append({"Section": "Geography", "Metric": row["Region"], "Value": row["Cases"], "Change": ""})
-            
-            # Add validation data
-            for _, row in validation_data.iterrows():
-                csv_data.append({"Section": "Validation", "Metric": row["Outcome"], "Value": row["Cases"], "Change": ""})
-            
-            # Add SHAP data
-            for _, row in shap_data.iterrows():
-                csv_data.append({"Section": "SHAP Analysis", "Metric": row["Feature"], "Value": row["SHAP Value"], "Change": ""})
-            
-            # Add NLP keywords
-            for _, row in nlp_keywords.iterrows():
-                csv_data.append({"Section": "NLP Keywords", "Metric": row["Keyword"], "Value": row["Frequency"], "Change": f"{row['Risk Increase (%)']}% increase"})
-            
-            export_df = pd.DataFrame(csv_data)
-            csv = export_df.to_csv(index=False)
-            st.download_button(
-                label="Download CSV",
-                data=csv,
-                file_name=f"fraud_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                key="download_csv"
-            )
-    
     with col2:
-        if st.button("📄 Export Report as PDF", use_container_width=True, key="export_pdf_btn"):
-            with st.spinner("Generating PDF report..."):
+        if st.button("📄 Generate Report Insight (PDF)", use_container_width=True, type="primary", key="generate_pdf_report_btn"):
+            with st.spinner("Generating enhanced PDF report with insights..."):
                 pdf_buffer = generate_pdf_report()
+                
+                # Get user email from session state
+                user_email = "unknown"
+                if hasattr(st.session_state, 'user') and st.session_state.user:
+                    if isinstance(st.session_state.user, dict):
+                        user_email = st.session_state.user.get('email', 'unknown')
+                    else:
+                        user_email = getattr(st.session_state.user, 'email', 'unknown')
+                
+                # Extract username part only (before @) for cleaner filename
+                username = user_email.split('@')[0] if '@' in user_email else user_email
+                date_str = datetime.now().strftime('%Y%m%d')
+                
                 st.download_button(
-                    label="Download PDF",
+                    label="📥 Download PDF Report",
                     data=pdf_buffer,
-                    file_name=f"fraud_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    file_name=f"FraudbAI_Report_{date_str}_{username}.pdf",
                     mime="application/pdf",
-                    key="download_pdf"
+                    key="download_pdf_final"
                 )
