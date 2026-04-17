@@ -8,14 +8,20 @@ def show():
     # --- Optimized: Reduced data loading and better caching ---
     @st.cache_data(ttl=300, show_spinner=False)
     def load_fraud_cases():
-        """Load fraud cases - only essential columns."""
+        """Load fraud cases - dynamically fetch only unvalidated cases."""
         try:
-            # ✅ UPDATED: Added explicit ordering to ensure consistent case display
-            # Keeps 1000 limit for sliding window effect (new cases appear as others are validated)
+            # First, get all validated case IDs
+            validated_response = supabase.table("validated_cases") \
+                .select("case_id") \
+                .execute()
+            
+            validated_ids = set([item['case_id'] for item in validated_response.data]) if validated_response.data else set()
+            
+            # Load a larger set to ensure we can find 1000 unvalidated cases
+            # We'll fetch 3000 and filter down to 1000 unvalidated
             response = supabase.table("fraud_cases") \
                 .select("case_id, amount_formatted, risk_display, transaction_date, sentiment, fraud_terms, complaint_link, customer_history, actual_fraud") \
-                .order('case_id', desc=False) \
-                .limit(1000) \
+                .limit(3000) \
                 .execute()
             
             if not response.data:
@@ -25,9 +31,16 @@ def show():
             if 'case_id' in df.columns:
                 df['case_id'] = df['case_id'].astype(str)
             
-            # Sort by numeric case_id to ensure correct order
+            # Filter out already validated cases
+            if validated_ids:
+                df = df[~df['case_id'].isin(validated_ids)]
+            
+            # Extract numeric part and sort properly (smallest IDs first)
             df['case_id_num'] = df['case_id'].str.extract(r'(\d+)$').astype(int)
-            df = df.sort_values('case_id_num').drop('case_id_num', axis=1)
+            df = df.sort_values('case_id_num')
+            
+            # Take the first 1000 smallest case IDs that are unvalidated
+            df = df.head(1000).drop('case_id_num', axis=1)
             
             return df.to_dict('records')
         except Exception as e:
@@ -36,13 +49,18 @@ def show():
 
     @st.cache_data(ttl=300, show_spinner=False)
     def load_validated_cases():
-        """Load validated cases - limited and optimized."""
+        """Load validated cases - limited and optimized with numeric sorting."""
         try:
             response = supabase.table("validated_cases") \
                 .select("case_id, amount, risk_score, sentiment, fraud_terms, complaint_link, customer_history, validated, valid_type, feedback_notes, timestamp, updated_at") \
                 .execute()
             
-            return response.data if response.data else []
+            if response.data:
+                # ✅ FIXED: Sort by numeric case_id before returning
+                data = response.data
+                data.sort(key=lambda x: int(re.search(r'(\d+)$', x['case_id']).group(1)) if re.search(r'(\d+)$', x['case_id']) else 0)
+                return data
+            return []
         except Exception as e:
             st.error(f"Error loading validated cases: {e}")
             return []
@@ -550,9 +568,12 @@ def show():
                     
                     st.markdown(f"**Page {st.session_state.validated_page + 1} / {total_pages}** (Showing {start_idx + 1}-{end_idx} of {len(validated_cases_list)} cases)")
                     
-                    # ✅ FIXED: Use ALL validated cases for the selectbox, not just current page
-                    # Sort options for better usability
-                    all_case_ids = sorted([v['case_id'] for v in validated_cases_list])
+                    # ✅ FIXED: Sort by numeric case_id, not alphabetical string sorting
+                    # Extract numeric part and sort properly (smallest IDs first)
+                    all_case_ids = sorted(
+                        [v['case_id'] for v in validated_cases_list],
+                        key=lambda x: int(re.search(r'(\d+)$', x).group(1)) if re.search(r'(\d+)$', x) else 0
+                    )
                     
                     selected_revalidation = st.selectbox(
                         "Select a validated case to revalidate:",
