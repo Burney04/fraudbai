@@ -79,9 +79,9 @@ def show():
         button[kind="formSubmit"]:hover {
             color: black !important;
         }
-        /* White text for regular buttons (Register here) */
+        /* Dark text for regular buttons (Register here) */
         button[kind="secondary"] {
-            color: white !important;
+            color: black !important;
         }
         /* White text for link buttons (Google) */
         a button {

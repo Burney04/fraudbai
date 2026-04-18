@@ -49,26 +49,29 @@ def show():
         .stTextInput > div {
             position: relative !important;
         }
-        /* White text for Register button */
-        div[data-testid="stFormSubmitButton"] button {
+        /* White text for form submit button (Register) */
+        button[kind="formSubmit"] {
             color: white !important;
         }
-        /* Hover effect for Register button - text turns black */
-        div[data-testid="stFormSubmitButton"] button:hover {
+        /* Hover effect for form submit button - text turns black */
+        button[kind="formSubmit"]:hover {
             color: black !important;
         }
-        /* White text for login button - no hover effect */
-        .stButton > button {
+        /* Dark text for regular buttons (Login here) */
+        button[kind="secondary"] {
+            color: black !important;
+        }
+        /* White text for link buttons (Google) */
+        a button {
             color: white !important;
         }
-        /* White text for Google button */
+        /* Hover effect for link buttons - text turns black */
+        a button:hover {
+            color: black !important;
+        }
+        /* Fallback for Google button width */
         .stLinkButton > button {
-            color: white !important;
             width: 100% !important;
-        }
-        /* Hover effect for Google button - text turns black */
-        .stLinkButton > button:hover {
-            color: black !important;
         }
     </style>
     """, unsafe_allow_html=True)
