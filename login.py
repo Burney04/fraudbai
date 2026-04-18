@@ -82,27 +82,10 @@ def show():
         /* White text for regular buttons (Register here) */
         button[kind="secondary"] {
             color: white !important;
-            background: transparent !important;
-            border: 1px solid white !important;
-        }
-        /* Hover effect for regular buttons - text turns black, background turns white */
-        button[kind="secondary"]:hover {
-            color: black !important;
-            background: white !important;
         }
         /* White text for link buttons (Google) */
         a button {
             color: white !important;
-        }
-        /* Fallback for any button not caught by the above */
-        .stButton > button {
-            color: white !important;
-            background: transparent !important;
-            border: 1px solid white !important;
-        }
-        .stButton > button:hover {
-            color: black !important;
-            background: white !important;
         }
     </style>
     """, unsafe_allow_html=True)
