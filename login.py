@@ -71,16 +71,20 @@ def show():
             margin: 10px 0;
             text-align: center;
         }
-        /* White text for specific buttons */
-        div[data-testid="stFormSubmitButton"] button {
+        /* White text for form submit buttons (Login, Forgot Password, Send Reset Link, Back to Login) */
+        button[kind="formSubmit"] {
             color: white !important;
         }
-        /* Hover effect for Login and Forgot Password buttons - text turns black */
-        div[data-testid="stFormSubmitButton"] button:hover {
+        /* Hover effect for form submit buttons - text turns black */
+        button[kind="formSubmit"]:hover {
             color: black !important;
         }
-        /* White text for register button */
-        .stButton > button {
+        /* White text for regular buttons (Register here) */
+        button[kind="secondary"] {
+            color: white !important;
+        }
+        /* White text for link buttons (Google) */
+        a button {
             color: white !important;
         }
     </style>
