@@ -71,6 +71,18 @@ def show():
             margin: 10px 0;
             text-align: center;
         }
+        /* White text for specific buttons */
+        div[data-testid="stFormSubmitButton"] button {
+            color: white !important;
+        }
+        /* Hover effect for Login and Forgot Password buttons - text turns black */
+        div[data-testid="stFormSubmitButton"] button:hover {
+            color: black !important;
+        }
+        /* White text for register button */
+        .stButton > button {
+            color: white !important;
+        }
     </style>
     """, unsafe_allow_html=True)
 

@@ -22,7 +22,54 @@ def show():
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
             color: black;
         }
-        h2, p, label, div { color: black !important; }
+        /* Style for form buttons - keep consistent width */
+        .stForm button {
+            width: 100% !important;
+        }
+        /* Fix for text input fields */
+        .stTextInput input {
+            text-align: left !important;
+            padding-right: 2.5rem !important;
+        }
+        /* Ensure the password toggle button stays on the right and centered vertically */
+        .stTextInput button {
+            position: absolute !important;
+            right: 0 !important;
+            top: 55% !important;
+            transform: translateY(-50%) !important;
+            width: auto !important;
+            min-width: unset !important;
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 10px !important;
+            margin-top: 2px !important;
+        }
+        /* Adjust the container height if needed */
+        .stTextInput > div {
+            position: relative !important;
+        }
+        /* White text for Register button */
+        div[data-testid="stFormSubmitButton"] button {
+            color: white !important;
+        }
+        /* Hover effect for Register button - text turns black */
+        div[data-testid="stFormSubmitButton"] button:hover {
+            color: black !important;
+        }
+        /* White text for login button - no hover effect */
+        .stButton > button {
+            color: white !important;
+        }
+        /* White text for Google button */
+        .stLinkButton > button {
+            color: white !important;
+            width: 100% !important;
+        }
+        /* Hover effect for Google button - text turns black */
+        .stLinkButton > button:hover {
+            color: black !important;
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -64,9 +111,12 @@ def show():
 
     st.divider()
 
-    # Google register (mode=register creates profile if missing)
-    google_auth_link("🧾 Register with Google", mode="register")
+    # Center the Google register button
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        google_auth_link("🧾 Register with Google", mode="register")
 
+    # Center the login button
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("Already have an account? Login here", use_container_width=True):
