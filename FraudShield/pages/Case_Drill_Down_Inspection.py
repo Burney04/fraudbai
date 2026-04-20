@@ -334,35 +334,15 @@ def show():
         "📈 Model Explainability (SHAP)"
     ])
     
-    # --------------------------
+        # --------------------------
     # TAB 1: CASE OVERVIEW
     # --------------------------
     with tab1:
-        # CSS styling for overview with theme-adaptive colors
+        # CSS styling for overview - only risk badge styling
         st.markdown(
             """
             <style>
-            .overview-label {
-                font-size: 1rem !important;
-                font-weight: 600 !important;
-                color: #6B7280 !important;
-                margin-bottom: 4px !important;
-            }
-            .overview-value {
-                font-size: 1.35rem !important;
-                font-weight: 600 !important;
-                color: #1F2937 !important;
-                margin-bottom: 20px !important;
-            }
-            /* Dark mode support for text colors */
-            @media (prefers-color-scheme: dark) {
-                .overview-label {
-                    color: #9CA3AF !important;
-                }
-                .overview-value {
-                    color: #F3F4F6 !important;
-                }
-            }
+            /* Risk badge styling */
             .risk-badge {
                 display: inline-block;
                 padding: 6px 14px !important;
@@ -373,6 +353,13 @@ def show():
             .risk-high { background-color: #FEE2E2; color: #DC2626; }
             .risk-medium { background-color: #FEF3C7; color: #D97706; }
             .risk-low { background-color: #D1FAE5; color: #059669; }
+            
+            /* Dark mode adjustments for risk badges */
+            @media (prefers-color-scheme: dark) {
+                .risk-high { background-color: #7F1D1D; color: #FCA5A5; }
+                .risk-medium { background-color: #78350F; color: #FCD34D; }
+                .risk-low { background-color: #064E3B; color: #6EE7B7; }
+            }
             </style>
             """,
             unsafe_allow_html=True
@@ -381,23 +368,23 @@ def show():
         # Row 1: Case ID and Date
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown(f'<div class="overview-label">📌 Case ID</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="overview-value">{selected_case.get("case_id", "N/A")}</div>', unsafe_allow_html=True)
+            st.caption("📌 Case ID")
+            st.markdown(f"### {selected_case.get('case_id', 'N/A')}")
         with col2:
-            st.markdown(f'<div class="overview-label">📅 Date</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="overview-value">{selected_case.get("date_str", "N/A")}</div>', unsafe_allow_html=True)
+            st.caption("📅 Date")
+            st.markdown(f"### {selected_case.get('date_str', 'N/A')}")
         
         # Row 2: Risk Score and Amount
         col3, col4 = st.columns(2)
         with col3:
-            st.markdown(f'<div class="overview-label">🎯 Risk Score</div>', unsafe_allow_html=True)
+            st.caption("🎯 Risk Score")
             st.markdown(
-                f'<div class="overview-value"><span class="risk-badge {risk_class}">{risk_percentage} ({risk_badge})</span></div>',
+                f'<span class="risk-badge {risk_class}">{risk_percentage} ({risk_badge})</span>',
                 unsafe_allow_html=True
             )
         with col4:
-            st.markdown(f'<div class="overview-label">💰 Amount</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="overview-value">{selected_case.get("amount_formatted", "N/A")}</div>', unsafe_allow_html=True)
+            st.caption("💰 Amount")
+            st.markdown(f"### {selected_case.get('amount_formatted', 'N/A')}")
     
     # --------------------------
     # TAB 2: FEATURES (Structured & Unstructured)
