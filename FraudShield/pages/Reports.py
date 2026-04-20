@@ -712,35 +712,104 @@ def render_reports():
     # ---- Tab 4: Validation ----
     with tab4:
         st.subheader("Validation Summary")
+        
+        # ✅ FETCH REAL VALIDATION DATA FROM SUPABASE
+        @st.cache_data(ttl=60)
+        def load_validation_summary():
+            """Load real validation summary from validated_cases table."""
+            try:
+                response = supabase.table("validated_cases") \
+                    .select("valid_type") \
+                    .execute()
+                
+                if response.data:
+                    df = pd.DataFrame(response.data)
+                    
+                    # Count each validation type
+                    confirmed_fraud = len(df[df['valid_type'] == 'Confirmed Fraud'])
+                    legitimate = len(df[df['valid_type'] == 'Legitimate'])
+                    escalated = len(df[df['valid_type'] == 'Escalated'])
+                    
+                    # Also check for auto-validated cases that might have different naming
+                    if confirmed_fraud == 0:
+                        confirmed_fraud = len(df[df['valid_type'].str.contains('Confirmed', case=False, na=False)])
+                    if legitimate == 0:
+                        legitimate = len(df[df['valid_type'].str.contains('Legitimate', case=False, na=False)])
+                    if escalated == 0:
+                        escalated = len(df[df['valid_type'].str.contains('Escalated', case=False, na=False)])
+                    
+                    return {
+                        "Confirmed Fraud": confirmed_fraud,
+                        "Rejected (Legitimate)": legitimate,
+                        "Escalated": escalated,
+                        "Pending": 0  # Pending cases aren't in validated_cases table
+                    }
+                else:
+                    return None
+            except Exception as e:
+                st.error(f"Error loading validation data: {e}")
+                return None
+        
+        # Try to load real data, fall back to sample data if unavailable
+        real_validation = load_validation_summary()
+        
+        if real_validation and (real_validation["Confirmed Fraud"] > 0 or real_validation["Rejected (Legitimate)"] > 0 or real_validation["Escalated"] > 0):
+            # Use real data
+            validation_data = pd.DataFrame({
+                "Outcome": list(real_validation.keys()),
+                "Cases": list(real_validation.values()),
+                "Color": ["#ef4444", "#22c55e", "#f97316", "#a855f7"],
+            })
+            st.caption(f"📊 Showing real validation data from {sum(real_validation.values())} validated cases")
+        else:
+            # Fall back to sample data
+            validation_data = pd.DataFrame({
+                "Outcome": ["Confirmed Fraud", "Rejected (Legitimate)", "Escalated", "Pending"],
+                "Cases": [98, 127, 23, 42],
+                "Color": ["#ef4444", "#22c55e", "#f97316", "#a855f7"],
+            })
+            st.caption("📊 Showing sample validation data (no real data available yet)")
+        
         col1, col2 = st.columns([1.2, 1])
         with col1:
-            fig = px.pie(validation_data, names="Outcome", values="Cases", color="Outcome",
-                         color_discrete_map={
-                             "Confirmed Fraud": "#ef4444",
-                             "Rejected (Legitimate)": "#22c55e",
-                             "Escalated": "#f97316",
-                             "Pending": "#a855f7",
-                         })
-            fig.update_layout(showlegend=False)
-            st.plotly_chart(fig, use_container_width=True, key="validation_pie_chart")
+            # Filter out zero values to avoid empty pie slices
+            plot_data = validation_data[validation_data['Cases'] > 0]
+            
+            if not plot_data.empty:
+                fig = px.pie(plot_data, names="Outcome", values="Cases", color="Outcome",
+                             color_discrete_map={
+                                 "Confirmed Fraud": "#ef4444",
+                                 "Rejected (Legitimate)": "#22c55e",
+                                 "Escalated": "#f97316",
+                                 "Pending": "#a855f7",
+                             })
+                fig.update_layout(showlegend=False)
+                st.plotly_chart(fig, use_container_width=True, key="validation_pie_chart")
+            else:
+                st.info("No validation data available to display.")
+        
         with col2:
             total_cases = validation_data["Cases"].sum()
-            for _, row in validation_data.iterrows():
-                percent = (row["Cases"] / total_cases) * 100
-                st.markdown(
-                    f"""
-                    <div style='margin-bottom:12px'>
-                        <strong>{row["Outcome"]}</strong>
-                        <div style='background-color:#e5e7eb;border-radius:8px;height:20px;overflow:hidden;margin-top:6px;'>
-                            <div style='width:{percent}%;background-color:{row["Color"]};height:100%;'></div>
-                        </div>
-                        <div style='font-size:14px;margin-top:4px;color:gray'>
-                            {row["Cases"]} cases ({percent:.1f}%)
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+            if total_cases > 0:
+                for _, row in validation_data.iterrows():
+                    if row["Cases"] > 0:
+                        percent = (row["Cases"] / total_cases) * 100
+                        st.markdown(
+                            f"""
+                            <div style='margin-bottom:12px'>
+                                <strong>{row["Outcome"]}</strong>
+                                <div style='background-color:#e5e7eb;border-radius:8px;height:20px;overflow:hidden;margin-top:6px;'>
+                                    <div style='width:{percent}%;background-color:{row["Color"]};height:100%;'></div>
+                                </div>
+                                <div style='font-size:14px;margin-top:4px;color:gray'>
+                                    {row["Cases"]} cases ({percent:.1f}%)
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+            else:
+                st.info("No cases to display")
 
     # ---- Tab 5: SHAP Summary ----
     with tab5:
