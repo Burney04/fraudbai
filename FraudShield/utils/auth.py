@@ -19,14 +19,35 @@ GOOGLE_SCOPES = [
 ]
 
 def _load_google_client():
+    # Try Streamlit secrets first (best for cloud)
+    try:
+        secret_json = st.secrets.get("GOOGLE_CLIENT_SECRET_JSON")
+        if secret_json:
+            return json.loads(secret_json)["web"]
+    except Exception:
+        pass
+
+    # Fallback to local file (best for local dev)
     with open("client_secret.json", "r", encoding="utf-8") as f:
         return json.load(f)["web"]
+        
 
 def _token_mgr() -> AuthTokenManager:
     token_key = os.getenv("TOKEN_KEY")
     if not token_key:
-        raise RuntimeError("Missing TOKEN_KEY in .env")
-    return AuthTokenManager(cookie_name="fraudshield_auth", token_key=token_key, token_duration_days=7)
+        try:
+            token_key = st.secrets.get("TOKEN_KEY")
+        except Exception:
+            token_key = None
+
+    if not token_key:
+        raise RuntimeError("Missing TOKEN_KEY (env/secrets)")
+
+    return AuthTokenManager(
+        cookie_name="fraudshield_auth",
+        token_key=token_key,
+        token_duration_days=7
+    )
 
 
 def profile_exists(email: str) -> bool:
@@ -87,36 +108,65 @@ def register_with_email(email: str, password: str, first_name: str, last_name: s
 
 
 def _google_flow():
-    secret_path = os.getenv("GOOGLE_CLIENT_SECRET_FILE", "client_secret.json")
-    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8501")
+    cfg = _load_google_client()
 
-    flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
-        secret_path,
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI")
+    if not redirect_uri:
+        try:
+            redirect_uri = st.secrets.get("GOOGLE_REDIRECT_URI")
+        except Exception:
+            redirect_uri = "http://localhost:8502"
+
+    redirect_uri = redirect_uri.strip()
+
+    # DEBUG (temporary)
+    # st.write("DEBUG oauth client_id:", cfg.get("client_id"))
+    # st.write("DEBUG redirect_uri:", redirect_uri)
+
+    flow = google_auth_oauthlib.flow.Flow.from_client_config(
+        {"web": cfg},
         scopes=GOOGLE_SCOPES,
         redirect_uri=redirect_uri,
     )
     return flow
 
 
+# 1. First, define the URL generator
+def get_google_auth_url(mode: str = "login"):
+    client_config = _load_google_client()
+    
+    # Ensure this matches your Google Console exactly
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI")
+    if not redirect_uri:
+        try:
+            redirect_uri = st.secrets.get("GOOGLE_REDIRECT_URI")
+        except:
+            redirect_uri = "https://fraudshield-app.streamlit.app" # Hardcode fallback
+
+    flow = google_auth_oauthlib.flow.Flow.from_client_config(
+        {"web": client_config},
+        scopes=GOOGLE_SCOPES,
+        redirect_uri=redirect_uri.strip()
+    )
+    
+    # We remove 'state' temporarily to ensure no mismatch 403s
+    authorization_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true"
+    )
+    return authorization_url
+
 def google_auth_link(label: str, mode: str):
-    """
-    mode: 'login' or 'register'
-    Redirects in the SAME tab to avoid Streamlit session reset.
-    """
     flow = _google_flow()
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         state=mode,
-        prompt="select_account",  # optional; helps when multiple accounts
+        prompt="select_account",
     )
+    # st.write("DEBUG auth_url:", auth_url)  # <-- add this line
 
-    if st.button(label, use_container_width=True):
-        st.markdown(
-            f"<meta http-equiv='refresh' content='0; url={auth_url}'>",
-            unsafe_allow_html=True,
-        )
-        st.stop()
+    st.link_button(label, auth_url, use_container_width=True)
 
 def handle_google_callback():
     qp = dict(st.query_params)
@@ -132,7 +182,15 @@ def handle_google_callback():
     cfg = _load_google_client()
     client_id = cfg["client_id"]
     client_secret = cfg["client_secret"]
-    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8501")
+
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI")
+    if not redirect_uri:
+        try:
+               redirect_uri = st.secrets.get("GOOGLE_REDIRECT_URI")
+        except Exception:
+            redirect_uri = "http://localhost:8502"
+
+    redirect_uri = redirect_uri.strip()
 
     token_res = requests.post(
         "https://oauth2.googleapis.com/token",
@@ -162,7 +220,8 @@ def handle_google_callback():
     st.query_params.clear()
 
     return {"mode": mode, "email": email, "id_token": idt}
-
+    
+    
 def google_login_or_register():
     try:
         payload = handle_google_callback()
@@ -176,8 +235,8 @@ def google_login_or_register():
     email = payload.get("email")
     id_token = payload.get("id_token")
 
-    st.write("DEBUG google email:", email)
-    st.write("DEBUG has id_token:", bool(id_token))
+    #st.write("DEBUG google email:", email)
+    #st.write("DEBUG has id_token:", bool(id_token))
 
     if not email or not id_token:
         st.error("❌ Google auth failed (missing email or id_token).")
@@ -185,7 +244,7 @@ def google_login_or_register():
 
     try:
         res = supabase.auth.sign_in_with_id_token({"provider": "google", "token": id_token})
-        st.write("DEBUG supabase sign_in_with_id_token ok:", bool(res and res.user))
+        #st.write("DEBUG supabase sign_in_with_id_token ok:", bool(res and res.user))
     except Exception as e:
         st.error(f"❌ Supabase Google sign-in failed: {e}")
         return None
@@ -205,26 +264,23 @@ def google_login_or_register():
         provider="google",
     )
 
-def restore_supabase_session_from_cookie() -> bool:
-    """
-    Restores supabase session using tokens stored in the AuthTokenManager cookie.
-    Call this early in your Streamlit app (before you check auth state).
-    """
-    try:
-        decoded = _token_mgr().get_decoded_token()
-        if not decoded:
-            return False
+    from pathlib import Path
+    import json
+    import os
 
-        access_token = decoded.get("access_token")
-        refresh_token = decoded.get("refresh_token")
-        if not access_token or not refresh_token:
-            return False
-
-        # Adopt the session for Supabase client
-        supabase.auth.set_session(access_token, refresh_token)
-        return True
-    except Exception:
-        return False
+    # Only write local debug session file when running locally
+    if not os.getenv("STREAMLIT_SERVER_HEADLESS"):  # usually set on cloud/server runs
+        Path(".local_session.json").write_text(
+            json.dumps(
+                {
+                    "access_token": res.session.access_token,
+                    "refresh_token": res.session.refresh_token,
+                    "email": res.user.email,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     # Ensure profile exists (don’t block login if it fails)
     try:
@@ -235,6 +291,38 @@ def restore_supabase_session_from_cookie() -> bool:
 
     return res.user
 
+def set_display_name_in_session(first_name: str, last_name: str):
+    first_name = (first_name or "").strip()
+    last_name = (last_name or "").strip()
+
+    user_name = f"{first_name} {last_name}".strip() or "user_1"
+
+    if first_name and last_name:
+        initials = f"{first_name[0].upper()}{last_name[0].upper()}"
+    elif first_name:
+        initials = first_name[0].upper()
+    elif last_name:
+        initials = last_name[0].upper()
+    else:
+        initials = "U1"
+
+    st.session_state["user_name"] = user_name
+    st.session_state["user_initials"] = initials
+
+
+    try:
+        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        if res and res.session and res.user:
+            _token_mgr().set_token(
+                email=res.user.email,
+                access_token=res.session.access_token,
+                refresh_token=res.session.refresh_token,
+                provider="app",
+            )
+        return res, None
+    except Exception as e:
+        # Show the real error during debugging
+        return None, str(e)
 
 def logout():
     try:
@@ -244,3 +332,33 @@ def logout():
     _token_mgr().delete_token()
     st.session_state.clear()
     st.rerun()
+
+def send_password_reset(email: str):
+    """
+    Send password reset email via Supabase.
+    Returns (success, message) tuple.
+    """
+    try:
+        if not email or '@' not in email:
+            return False, "Please enter a valid email address."
+        
+        # Get the base URL of your app
+        base_url = os.getenv("APP_URL", "http://localhost:8501")
+        
+        # Send reset email with redirect to reset page
+        supabase.auth.reset_password_for_email(
+            email,
+            {
+                "redirect_to": f"{base_url}/?page=reset_password"
+            }
+        )
+        
+        return True, f"✅ Password reset link sent to {email}. Please check your inbox."
+    except Exception as e:
+        error_msg = str(e)
+        if "rate limit" in error_msg.lower():
+            return False, "⏰ Too many reset attempts. Please wait an hour."
+        elif "Email not found" in error_msg:
+            return False, "No account found with this email address."
+        else:
+            return False, f"Failed to send reset email: {error_msg}"
